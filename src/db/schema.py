@@ -38,11 +38,24 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ingested_at     TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS odds (
+                fixture_id      INTEGER NOT NULL,
+                bookmaker_id    INTEGER NOT NULL,
+                bookmaker_name  TEXT NOT NULL,
+                home_odds       REAL,
+                draw_odds       REAL,
+                away_odds       REAL,
+                ingested_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (fixture_id, bookmaker_id),
+                FOREIGN KEY (fixture_id) REFERENCES fixtures(fixture_id)
+            );
+
             CREATE TABLE IF NOT EXISTS ingest_runs (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 league_id       INTEGER NOT NULL,
                 season          INTEGER NOT NULL,
                 fixtures_saved  INTEGER NOT NULL,
+                odds_saved      INTEGER NOT NULL DEFAULT 0,
                 ran_at          TEXT NOT NULL DEFAULT (datetime('now'))
             );
         """)
