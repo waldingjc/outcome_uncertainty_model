@@ -1,11 +1,10 @@
-"""Ingest past fixture results from api-football (api-football.com / RapidAPI).
+"""Ingest past fixture results from api-football (api-football.com).
 
 Usage:
     python -m src.ingest.api_football --league 39 --season 2023
 
 Environment variables:
-    API_FOOTBALL_KEY   Your RapidAPI or api-football.com API key (required)
-    API_FOOTBALL_HOST  Override host (default: api-football-v1.p.rapidapi.com)
+    API_FOOTBALL_KEY   Your api-football.com API key (required)
 """
 
 import json
@@ -21,8 +20,7 @@ from src.db.schema import get_connection, init_db
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://{host}/v3"
-_DEFAULT_HOST = "api-football-v1.p.rapidapi.com"
+_BASE_URL = "https://v3.football.api-sports.io"
 _RAW_DIR = Path(__file__).parents[2] / "data" / "raw"
 # api-football free tier: 100 req/day; paid tiers are higher.
 _REQUEST_DELAY_S = 0.5
@@ -32,16 +30,7 @@ def _get_headers() -> dict:
     api_key = os.environ.get("API_FOOTBALL_KEY")
     if not api_key:
         raise EnvironmentError("API_FOOTBALL_KEY environment variable not set")
-    host = os.environ.get("API_FOOTBALL_HOST", _DEFAULT_HOST)
-    return {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": host,
-    }
-
-
-def _base_url() -> str:
-    host = os.environ.get("API_FOOTBALL_HOST", _DEFAULT_HOST)
-    return _BASE_URL.format(host=host)
+    return {"x-apisports-key": api_key}
 
 
 def _fetch_fixtures_page(league_id: int, season: int, page: int) -> dict:
@@ -51,9 +40,10 @@ def _fetch_fixtures_page(league_id: int, season: int, page: int) -> dict:
         "league": league_id,
         "season": season,
         "status": "FT",  # full-time only
-        "page": page,
     }
-    url = f"{_base_url()}/fixtures"
+    if page > 1:
+        params["page"] = page
+    url = f"{_BASE_URL}/fixtures"
     response = requests.get(url, headers=headers, params=params, timeout=30)
     response.raise_for_status()
     return response.json()
