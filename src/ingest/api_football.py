@@ -209,14 +209,22 @@ def ingest_odds(league_id: int, season: int, save_raw: bool = True) -> int:
     all_rows = []
     for fixture_raw in _paginated(
         "odds",
-        {"league": league_id, "season": season, "bet": _MATCH_WINNER_BET_ID},
+        {"league": league_id, "season": season},
         raw_prefix=f"odds_l{league_id}_s{season}",
         save_raw=save_raw,
     ):
         all_rows.extend(_parse_odds(fixture_raw))
 
     saved = _upsert_odds(all_rows)
-    logger.info("Odds: saved %d bookmaker rows", saved)
+    if saved == 0:
+        logger.warning(
+            "Odds: no data returned for league=%d season=%d. "
+            "api-football only retains pre-match odds for 7 days — "
+            "run this ingest before fixtures are played to capture odds.",
+            league_id, season,
+        )
+    else:
+        logger.info("Odds: saved %d bookmaker rows", saved)
     return saved
 
 
