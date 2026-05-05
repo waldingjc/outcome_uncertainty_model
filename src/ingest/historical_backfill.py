@@ -32,6 +32,7 @@ import argparse
 import logging
 import time
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from src.db.schema import get_connection, init_db
 from src.ingest import api_football as af
@@ -174,6 +175,49 @@ def run_backfill(min_budget: int = DEFAULT_MIN_BUDGET, save_raw: bool = True) ->
     fixtures_total = 0
     stopped_for_budget = False
 
+    # Pre-flight: probe /status (free — does not count against daily quota)
+    # to learn the current budget before we start spending real calls. This
+    # avoids wasting one fixtures call just to find out we're at the floor,
+    # and also catches the quota-exhausted case where /status itself returns
+    # an "errors.requests" body instead of normal data.
+    preflight_msg = None
+    try:
+        from src.ingest.api_football import request_v3
+        data, _ = request_v3("status", {})
+
+        errors = data.get("errors")
+        if isinstance(errors, dict) and "requests" in errors:
+            # api-football explicitly tells us we're over quota.
+            preflight_msg = errors["requests"]
+            af._last_remaining = 0
+        else:
+            # Read remaining budget from the response body — more reliable
+            # than the headers, which sometimes drop on edge cases.
+            response_body = data.get("response") or {}
+            req_block = response_body.get("requests") or {}
+            if req_block:
+                used = int(req_block.get("current", 0))
+                limit = int(req_block.get("limit_day", 100))
+                af._last_remaining = max(0, limit - used)
+    except Exception:
+        logger.exception("Pre-flight /status probe failed; proceeding anyway")
+
+    if af._last_remaining is not None and af._last_remaining <= min_budget:
+        if preflight_msg:
+            logger.warning("Pre-flight: %s", preflight_msg)
+        else:
+            logger.warning(
+                "Pre-flight: daily budget at %d (<= floor %d); nothing to do.",
+                af._last_remaining, min_budget,
+            )
+        return {
+            "jobs_completed": 0, "jobs_no_access": 0, "jobs_failed": 0,
+            "fixtures_total": 0, "stopped_for_budget": True,
+            "skipped_pre_flight": True,
+            "daily_calls_remaining": af._last_remaining,
+            "preflight_message": preflight_msg,
+        }
+
     while True:
         # Budget check first — bail before pulling another job if we're done for the day.
         if af._last_remaining is not None and af._last_remaining <= min_budget:
@@ -231,8 +275,46 @@ def run_backfill(min_budget: int = DEFAULT_MIN_BUDGET, save_raw: bool = True) ->
     return summary
 
 
+def _write_run_summary(summary: dict) -> Path:
+    """Write a JSON summary of the run to data/logs/last-run.json so the
+    Task Scheduler wrapper can pick it up for notifications without having
+    to parse stdout.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    log_dir = Path(__file__).parents[2] / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out_path = log_dir / "last-run.json"
+
+    # Augment with queue snapshot for the notification.
+    with get_connection() as conn:
+        queue = {
+            r["status"]: r["n"]
+            for r in conn.execute(
+                "SELECT status, COUNT(*) AS n FROM backfill_jobs GROUP BY status"
+            ).fetchall()
+        }
+
+    payload = {
+        **summary,
+        "queue": queue,
+        "ran_at": datetime.now(timezone.utc).isoformat(),
+    }
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out_path
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    import sys
+    # Send all log records to stdout. Without this, Python's default is
+    # stderr — and PowerShell's `2>&1` wraps stderr lines as ErrorRecord
+    # objects, which trips $ErrorActionPreference="Stop" in the wrapper.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stdout,
+    )
 
     parser = argparse.ArgumentParser(description="Process pending backfill_jobs")
     parser.add_argument(
@@ -243,11 +325,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     summary = run_backfill(min_budget=args.min_budget, save_raw=not args.no_raw)
-    print(
-        f"Backfill done — completed={summary['jobs_completed']}, "
-        f"no_access={summary['jobs_no_access']}, failed={summary['jobs_failed']}, "
-        f"fixtures saved this run={summary['fixtures_total']}, "
-        f"remaining budget={summary['daily_calls_remaining']}."
-    )
+    summary_path = _write_run_summary(summary)
+
+    if summary.get("skipped_pre_flight"):
+        print(
+            f"Pre-flight: skipped (daily budget at {summary['daily_calls_remaining']}, "
+            f"floor {args.min_budget})."
+        )
+    else:
+        print(
+            f"Backfill done — completed={summary['jobs_completed']}, "
+            f"no_access={summary['jobs_no_access']}, failed={summary['jobs_failed']}, "
+            f"fixtures saved this run={summary['fixtures_total']}, "
+            f"remaining budget={summary['daily_calls_remaining']}."
+        )
     if summary.get("stopped_for_budget"):
         print("Stopped for daily budget — re-run tomorrow to continue.")
+    print(f"Summary written to: {summary_path}")
