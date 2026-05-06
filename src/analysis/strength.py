@@ -152,33 +152,49 @@ def load_fixtures() -> pd.DataFrame:
 
 def compute_league_elo(
     df: pd.DataFrame,
-    k: float = DEFAULT_K,
+    k_init: float = 40.0,
+    k_final: float = 5.0,
+    max_passes: int = 10,
+    convergence_threshold: float = 1.0,
+    balance_sigma: float = 200.0,
     base_rating: float = DEFAULT_BASE_RATING,
-    n_passes: int = 2,
 ) -> tuple[dict[int, float], dict[int, int]]:
     """Compute Elo per LEAGUE using only inter-league matches.
 
     Strategy: walk through matches chronologically. If the two teams have
-    different primary leagues (i.e. their most-played league across the
-    dataset differs), we treat the result as a contest between the two
-    leagues and update each league's rating accordingly. Intra-league
-    matches are skipped — they tell us about the team-level distribution
-    within a league, not the league's overall strength.
+    different primary leagues, we treat the result as a contest between
+    the two leagues and update each league's rating. Intra-league matches
+    are skipped — they tell us about within-league spread, not absolute
+    league strength.
 
-    No home-advantage adjustment is applied at the league level: we want
-    a pure measure of "league strength" independent of where the match
-    was played.
+    Three improvements over a naive single-pass walk:
 
-    Multiple passes (default: 2) handle the cold-start problem — early
-    matches in pass 1 swing ratings unfairly because all leagues start
-    equal at 1500. Pass 2 starts from pass 1's final ratings and
-    re-iterates, producing more stable results.
+    1. **Multi-pass with K decay** — iterate up to `max_passes` (default 10),
+       linearly decaying K from `k_init` (default 40, big swings to
+       establish ordering) down to `k_final` (default 5, fine-tuning).
+
+    2. **Balanced-match weighting** — from pass 2 onwards, scale each
+       match's update by a Gaussian of the league-Elo gap:
+            weight = exp(-(gap / sigma)**2)
+       Matches between similarly-rated leagues (gap small) get full weight;
+       matches between mismatched leagues (gap large) get near-zero
+       weight. This is the key fix for the "top tiers crush their
+       domestic cup opponents and drift up" artifact: once ratings are
+       roughly correct, the cup-stomp matches contribute almost nothing,
+       and ratings settle based on contests between comparable leagues.
+
+    3. **Early stopping on convergence** — after each pass, measure the
+       max per-league rating change. If below `convergence_threshold`
+       (default 1.0 Elo points), declare converged and stop. Otherwise
+       run all `max_passes`.
 
     Returns:
         league_ratings:    {league_id: final Elo}
-        n_inter_matches:   {league_id: count of inter-league matches that
-                            updated this league's rating across all passes}
+        n_inter_matches:   {league_id: count of inter-league matches
+                            that updated this league across pass 1}
     """
+    import math
+
     df = df.sort_values("date").reset_index(drop=True)
     pmap = primary_league_map(df)
 
@@ -190,32 +206,76 @@ def compute_league_elo(
     league_ratings: dict[int, float] = {}
     n_matches: dict[int, int] = {}
 
-    for pass_idx in range(n_passes):
+    # Pre-compute league IDs for each match (one allocation, not n × max_passes).
+    h_lids = np.empty(len(df), dtype=np.int64)
+    a_lids = np.empty(len(df), dtype=np.int64)
+    for i in range(len(df)):
+        h_lids[i] = pmap.get(int(home_ids[i]), (-1, ""))[0]
+        a_lids[i] = pmap.get(int(away_ids[i]), (-1, ""))[0]
+    valid = (h_lids != a_lids) & (h_lids >= 0) & (a_lids >= 0)
+
+    actual_h_arr = np.where(
+        home_goals > away_goals, 1.0,
+        np.where(home_goals < away_goals, 0.0, 0.5),
+    )
+
+    for pass_idx in range(max_passes):
+        # Linearly decay K from k_init (pass 0) to k_final (pass max-1).
+        if max_passes <= 1:
+            k = k_final
+        else:
+            k = k_init + (k_final - k_init) * (pass_idx / (max_passes - 1))
+
+        prev_ratings = dict(league_ratings)
+
         for i in range(len(df)):
-            h_team = int(home_ids[i])
-            a_team = int(away_ids[i])
-            h_lid = pmap.get(h_team, (-1, ""))[0]
-            a_lid = pmap.get(a_team, (-1, ""))[0]
-            if h_lid == a_lid or h_lid < 0 or a_lid < 0:
+            if not valid[i]:
                 continue
+            h_lid = int(h_lids[i])
+            a_lid = int(a_lids[i])
 
             h = league_ratings.get(h_lid, base_rating)
             a = league_ratings.get(a_lid, base_rating)
             expected_h = 1.0 / (1.0 + 10.0 ** ((a - h) / 400.0))
-            if home_goals[i] > away_goals[i]:
-                actual_h = 1.0
-            elif home_goals[i] < away_goals[i]:
-                actual_h = 0.0
-            else:
-                actual_h = 0.5
 
-            delta = k * (actual_h - expected_h)
+            # Balance weight: only kicks in from pass 2 onwards (need rough
+            # ratings first). Matches between mismatched leagues contribute
+            # less. Pass 1 is unweighted to establish initial ordering.
+            if pass_idx == 0:
+                weight = 1.0
+            else:
+                gap = abs(h - a)
+                weight = math.exp(-((gap / balance_sigma) ** 2))
+
+            delta = k * weight * (actual_h_arr[i] - expected_h)
             league_ratings[h_lid] = h + delta
             league_ratings[a_lid] = a - delta
-            # Only count match samples on the first pass.
+
+            # Count samples only on pass 1.
             if pass_idx == 0:
                 n_matches[h_lid] = n_matches.get(h_lid, 0) + 1
                 n_matches[a_lid] = n_matches.get(a_lid, 0) + 1
+
+        # Convergence: max change since the snapshot at start of pass.
+        if pass_idx > 0:
+            keys = set(league_ratings) | set(prev_ratings)
+            max_change = max(
+                abs(league_ratings.get(lid, base_rating)
+                    - prev_ratings.get(lid, base_rating))
+                for lid in keys
+            ) if keys else 0.0
+            logger.info(
+                "Pass %d/%d (k=%.1f): max league rating change = %.3f",
+                pass_idx + 1, max_passes, k, max_change,
+            )
+            if max_change < convergence_threshold:
+                logger.info(
+                    "Converged after %d passes (max change %.3f < %.3f)",
+                    pass_idx + 1, max_change, convergence_threshold,
+                )
+                break
+        else:
+            logger.info("Pass 1/%d (k=%.1f, unweighted)", max_passes, k)
 
     return league_ratings, n_matches
 
