@@ -316,6 +316,7 @@ def compute_elo_ratings(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     base_rating: float = DEFAULT_BASE_RATING,
     seeding: str = "hardcoded",
+    team_seeds: dict[int, float] | None = None,
 ) -> tuple[pd.DataFrame, dict[int, float]]:
     """Walk matches chronologically, updating Elo ratings.
 
@@ -326,6 +327,11 @@ def compute_elo_ratings(
             - "league_elo": run `compute_league_elo` first to produce
               data-driven league ratings, then seed teams from those.
             - "uniform":  every team starts at base_rating (1500).
+            (Ignored if `team_seeds` is supplied.)
+        team_seeds: optional explicit map of {team_id: starting_rating}.
+            Overrides `seeding`. Use this when seeds were derived from a
+            pre-test-cutoff slice of data to avoid look-ahead leakage in
+            time-series modelling.
 
     Returns:
         df_out:  copy of `df` sorted by date, with two new columns
@@ -334,8 +340,10 @@ def compute_elo_ratings(
         ratings: final rating per team_id after all matches.
     """
     df = df.sort_values("date").reset_index(drop=True).copy()
-    if seeding == "uniform":
-        ratings: dict[int, float] = {}
+    if team_seeds is not None:
+        ratings: dict[int, float] = dict(team_seeds)
+    elif seeding == "uniform":
+        ratings = {}
     else:
         ratings = _seed_team_ratings(df, base_rating, mode=seeding)
     pre_home = np.empty(len(df), dtype=float)
