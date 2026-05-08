@@ -35,6 +35,15 @@ TRAIN_CUTOFF: datetime = datetime(2024, 7, 1)
 # Default target competition: English Premier League.
 DEFAULT_TARGET_LEAGUE: int = 39
 
+# Top-5 European first-tier leagues — handy preset for widening scope.
+TOP5_EUROPEAN: frozenset[int] = frozenset({
+    39,   # Premier League
+    140,  # La Liga
+    135,  # Serie A (Italy)
+    78,   # Bundesliga
+    61,   # Ligue 1
+})
+
 # Leagues entirely excluded from BOTH Elo computation and training.
 # These don't represent normal competitive senior club football and would
 # only add noise to ratings.
@@ -71,8 +80,14 @@ def is_cup_competition(league_name: str) -> bool:
 
 @dataclass(frozen=True)
 class FilterConfig:
-    """Filtering options for the training/test fixture loader."""
-    target_league_id: int = DEFAULT_TARGET_LEAGUE
+    """Filtering options for the training/test fixture loader.
+
+    `target_league_ids` is the set of league IDs to keep as the modelling
+    target. Defaults to just the Premier League. Pass `TOP5_EUROPEAN` to
+    widen scope to the top European first tiers (~5,500 matches over 3
+    seasons), or any custom subset.
+    """
+    target_league_ids: frozenset[int] = frozenset({DEFAULT_TARGET_LEAGUE})
     include_cups: bool = False
     additional_excluded_leagues: frozenset[int] = frozenset()
 
@@ -138,7 +153,7 @@ def load_training_fixtures(
     """
     cfg = cfg or FilterConfig()
     df = _load_all()
-    df = df[df["league_id"] == cfg.target_league_id]
+    df = df[df["league_id"].isin(set(cfg.target_league_ids))]
 
     if not cfg.include_cups:
         df = df[~df["is_cup"]]

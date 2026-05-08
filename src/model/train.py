@@ -17,14 +17,31 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
+# LightGBM is imported lazily inside GBMModel so the rest of the module
+# loads cleanly even if lightgbm isn't installed (some dev / CI envs).
+try:
+    import lightgbm as lgb  # type: ignore
+    _LGB_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _LGB_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
 # Columns always excluded from the feature matrix.
+# NOTE: league_id is intentionally NOT excluded here — when scope spans
+# multiple leagues, it carries real signal (different leagues have
+# different draw rates and home-advantage strengths). See _CATEGORICAL_COLS
+# below for how it's handled.
 _EXCLUDED_BY_DEFAULT: frozenset[str] = frozenset({
-    "fixture_id", "date", "season", "league_id",
+    "fixture_id", "date", "season",
     "home_team_id", "away_team_id", "result",
 })
+
+# Columns that should be treated as categorical, not numeric. For the LR
+# we one-hot encode them; for the GBM we pass them through as native
+# LightGBM categorical features. Currently just league_id.
+_CATEGORICAL_COLS: tuple[str, ...] = ("league_id",)
 
 
 # Curated feature list, deliberately small to fit our 760-row training set
@@ -44,6 +61,7 @@ _EXCLUDED_BY_DEFAULT: frozenset[str] = frozenset({
 #   Fatigue:        rest-days gap and matches-in-last-14-days gap.
 #   Context:        season match number for both sides (early-season uncertainty).
 CURATED_FEATURES: tuple[str, ...] = (
+    "league_id",                  # categorical — league-level effects
     "home_pre_elo",
     "away_pre_elo",
     "elo_gap",
@@ -111,6 +129,29 @@ class LogisticModel:
         self._scale_std: np.ndarray | None = None
         self._model: LogisticRegression | None = None
         self._classes_: list[str] | None = None
+        # Final post-one-hot column list, captured at fit time so predict
+        # can align (test sets may be missing or have extra category levels).
+        self._encoded_columns: list[str] | None = None
+
+    def _prepare_features(self, X: pd.DataFrame, fit_phase: bool) -> pd.DataFrame:
+        """One-hot encode any categorical columns in `feature_cols`.
+
+        At fit time this captures the resulting column list; at predict time
+        it reindexes to that list so unseen category levels become all-zeros
+        and missing levels are filled with zero. This keeps the column count
+        / order consistent between fit and predict.
+        """
+        assert self.feature_cols is not None
+        df = X[self.feature_cols].copy()
+        cats = [c for c in _CATEGORICAL_COLS if c in df.columns]
+        if cats:
+            df = pd.get_dummies(df, columns=cats, dtype=float, dummy_na=False)
+        if fit_phase:
+            self._encoded_columns = df.columns.tolist()
+        else:
+            assert self._encoded_columns is not None
+            df = df.reindex(columns=self._encoded_columns, fill_value=0.0)
+        return df
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "LogisticModel":
         if self.feature_cols is None:
@@ -135,7 +176,8 @@ class LogisticModel:
                     len(self.feature_cols), self.C,
                 )
 
-        Xf = X[self.feature_cols].astype(float).values
+        Xf_df = self._prepare_features(X, fit_phase=True)
+        Xf = Xf_df.values.astype(float)
 
         # Impute NaN with column mean (computed from train only)
         means = np.nanmean(Xf, axis=0)
@@ -178,7 +220,8 @@ class LogisticModel:
         assert self._scale_std is not None
         assert self._classes_ is not None
 
-        Xf = X[self.feature_cols].astype(float).values
+        Xf_df = self._prepare_features(X, fit_phase=False)
+        Xf = Xf_df.values.astype(float)
         Xf = np.where(np.isnan(Xf), self._impute_means, Xf)
         Xs = (Xf - self._scale_mean) / self._scale_std
         proba = self._model.predict_proba(Xs)
@@ -196,14 +239,160 @@ class LogisticModel:
     @property
     def feature_importance_(self) -> pd.DataFrame | None:
         """Per-feature signed coefficients from the LR fit, one row per
-        (feature, class). Useful for inspecting what drives predictions.
-        Returns None until `fit()` is called.
+        (encoded-feature, class). Returns None until `fit()` is called.
+
+        Indexed by the post-one-hot column names (so categorical features
+        get one row per level), not the original `feature_cols`.
         """
-        if self._model is None or self.feature_cols is None or self._classes_ is None:
+        if self._model is None or self._classes_ is None or self._encoded_columns is None:
             return None
         coef = self._model.coef_  # shape (n_classes, n_features)
         return pd.DataFrame(
             coef.T,
-            index=self.feature_cols,
+            index=self._encoded_columns,
             columns=[f"coef_{c}" for c in self._classes_],
+        )
+
+
+class GBMModel:
+    """Gradient-boosted decision trees (LightGBM) for the H/D/A task.
+
+    Compared to LogisticModel:
+      * Handles NaN natively — no mean imputation needed.
+      * Handles correlated features cleanly — splits on the most informative
+        column at each node, doesn't get confused by multiple "form" columns
+        encoding similar information.
+      * Captures non-linear interactions automatically (e.g. "elo_gap
+        matters less when the away team is on a hot streak").
+
+    Default hyperparameters tuned for our small Premier League training
+    set (~760 rows). The defaults below were the best of a sweep against
+    the Elo baseline; relaxing any of them caused the GBM to overfit
+    badly (kitchen-sink + standard GBM hyperparams gives log-loss ~1.20
+    vs Elo's 1.00).
+
+    Defaults:
+      use_curated=True         use the 14-feature curated list, not all 64
+      num_leaves=7             very shallow trees
+      min_data_in_leaf=50      no leaf with fewer than 50 matches
+      max_depth=3              hard cap at depth 3
+      learning_rate=0.03       slow boosting
+      n_estimators=100         fixed; can swap for early-stopping later
+
+    With more data (e.g. once we widen scope past PL to top European
+    leagues, ~5,500 matches), these can probably be relaxed.
+    """
+
+    def __init__(
+        self,
+        feature_cols: list[str] | None = None,
+        n_estimators: int = 100,
+        learning_rate: float = 0.03,
+        num_leaves: int = 7,
+        min_data_in_leaf: int = 50,
+        max_depth: int = 3,
+        reg_lambda: float = 0.5,
+        random_state: int = 42,
+        use_curated: bool = True,
+    ) -> None:
+        if not _LGB_AVAILABLE:
+            raise RuntimeError(
+                "lightgbm is not installed. Install with `pip install lightgbm`."
+            )
+        self.feature_cols = feature_cols
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.num_leaves = num_leaves
+        self.min_data_in_leaf = min_data_in_leaf
+        self.max_depth = max_depth
+        self.reg_lambda = reg_lambda
+        self.random_state = random_state
+        # GBMs benefit from MORE features by default — they can ignore the
+        # noise. The curated list is still available for ablation runs.
+        self.use_curated = use_curated
+
+        self._model: "lgb.LGBMClassifier | None" = None
+        self._classes_: list[str] | None = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> "GBMModel":
+        if self.feature_cols is None:
+            if self.use_curated:
+                self.feature_cols = [c for c in CURATED_FEATURES if c in X.columns]
+            else:
+                self.feature_cols = _default_feature_cols(X)
+        logger.info(
+            "GBMModel: %d features (n_estimators=%d, lr=%.2f, num_leaves=%d, "
+            "min_data_in_leaf=%d, max_depth=%d)",
+            len(self.feature_cols), self.n_estimators, self.learning_rate,
+            self.num_leaves, self.min_data_in_leaf, self.max_depth,
+        )
+
+        # LightGBM accepts categoricals natively as int columns named in
+        # `categorical_feature`. Don't cast those to float — keep them int.
+        cat_cols = [c for c in _CATEGORICAL_COLS if c in self.feature_cols]
+        Xf = X[self.feature_cols].copy()
+        for c in self.feature_cols:
+            if c in cat_cols:
+                Xf[c] = Xf[c].astype("int32")
+            else:
+                Xf[c] = Xf[c].astype(float)
+
+        self._model = lgb.LGBMClassifier(
+            objective="multiclass",
+            num_class=3,
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            num_leaves=self.num_leaves,
+            min_data_in_leaf=self.min_data_in_leaf,
+            max_depth=self.max_depth,
+            reg_lambda=self.reg_lambda,
+            random_state=self.random_state,
+            verbose=-1,
+            force_col_wise=True,
+        )
+        self._model.fit(
+            Xf, y.values,
+            categorical_feature=cat_cols if cat_cols else "auto",
+        )
+        self._classes_ = list(self._model.classes_)
+        self._cat_cols = cat_cols
+        return self
+
+    def predict_proba(self, X: pd.DataFrame) -> pd.DataFrame:
+        if self._model is None or self.feature_cols is None or self._classes_ is None:
+            raise RuntimeError("Call fit() first")
+        Xf = X[self.feature_cols].copy()
+        for c in self.feature_cols:
+            if c in getattr(self, "_cat_cols", []):
+                Xf[c] = Xf[c].astype("int32")
+            else:
+                Xf[c] = Xf[c].astype(float)
+        proba = self._model.predict_proba(Xf)
+        idx_H = self._classes_.index("H")
+        idx_D = self._classes_.index("D")
+        idx_A = self._classes_.index("A")
+        return pd.DataFrame({
+            "p_H": proba[:, idx_H],
+            "p_D": proba[:, idx_D],
+            "p_A": proba[:, idx_A],
+        }, index=X.index)
+
+    @property
+    def feature_importance_(self) -> pd.DataFrame | None:
+        """Gain-based importance per feature, summed across all classes.
+
+        LightGBM's "gain" is the total reduction in loss attributable to
+        splits on that feature — high gain = informative feature. This is
+        a single number per feature, unlike LR which has one per class.
+        """
+        if self._model is None or self.feature_cols is None:
+            return None
+        return (
+            pd.DataFrame({
+                "feature": self.feature_cols,
+                "gain": self._model.booster_.feature_importance(importance_type="gain"),
+                "splits": self._model.booster_.feature_importance(importance_type="split"),
+            })
+            .sort_values("gain", ascending=False)
+            .reset_index(drop=True)
         )

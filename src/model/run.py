@@ -30,6 +30,7 @@ from src.analysis.strength import (
 from src.model.baselines import ClimatologyBaseline, EloBaseline
 from src.model.data import (
     DEFAULT_TARGET_LEAGUE,
+    TOP5_EUROPEAN,
     TRAIN_CUTOFF,
     FilterConfig,
     SplitConfig,
@@ -39,7 +40,7 @@ from src.model.data import (
 )
 from src.model.evaluate import evaluation_report
 from src.model.features import build_features
-from src.model.train import LogisticModel
+from src.model.train import GBMModel, LogisticModel
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def _print_report(name: str, report: dict) -> None:
 
 
 def run(
-    target_league: int = DEFAULT_TARGET_LEAGUE,
+    target_league_ids: frozenset[int] = frozenset({DEFAULT_TARGET_LEAGUE}),
     include_cups: bool = False,
     cutoff: datetime = TRAIN_CUTOFF,
     n_boot: int = 1000,
@@ -87,11 +88,17 @@ def run(
     # ---- 3. Walk team Elo through the FULL corpus using those seeds --------
     elo_with_pre, _ = compute_elo_ratings(elo_corpus, team_seeds=team_seeds)
 
-    # ---- 4. Filter to target league for feature building -------------------
-    target = elo_with_pre[elo_with_pre["league_id"] == target_league].reset_index(drop=True)
+    # ---- 4. Filter to target league(s) for feature building ----------------
+    target = elo_with_pre[
+        elo_with_pre["league_id"].isin(set(target_league_ids))
+    ].reset_index(drop=True)
     if not include_cups and "is_cup" in target.columns:
         target = target[~target["is_cup"]].reset_index(drop=True)
-    logger.info("Target rows: %d", len(target))
+    logger.info(
+        "Target rows: %d across %d league(s) [%s]",
+        len(target), target["league_id"].nunique(),
+        ", ".join(str(x) for x in sorted(target["league_id"].unique())),
+    )
 
     # ---- 5. Build features (leakage-safe by construction) ------------------
     features = build_features(target, elo_with_pre)
@@ -127,14 +134,24 @@ def run(
     # ---- 8. Fit + evaluate logistic regression -----------------------------
     lr = LogisticModel().fit(train, y_train)
     lr_probs = lr.predict_proba(test)
-    _print_report("Logistic regression v1", evaluation_report(y_test, lr_probs, n_boot=n_boot))
+    _print_report("Logistic regression v2", evaluation_report(y_test, lr_probs, n_boot=n_boot))
 
-    # Quick top-coefficient peek (helps interpret what the LR learned)
-    fi = lr.feature_importance_
-    if fi is not None:
+    # ---- 9. Fit + evaluate GBM (LightGBM) ---------------------------------
+    gbm = GBMModel().fit(train, y_train)
+    gbm_probs = gbm.predict_proba(test)
+    _print_report("Gradient-boosted trees", evaluation_report(y_test, gbm_probs, n_boot=n_boot))
+
+    # ---- Diagnostics ------------------------------------------------------
+    fi_lr = lr.feature_importance_
+    if fi_lr is not None:
         print("\nLR — top 10 features by |coef_H| (positive = pushes prob toward home win):")
-        top = fi.assign(abs_H=fi["coef_H"].abs()).sort_values("abs_H", ascending=False).head(10)
+        top = fi_lr.assign(abs_H=fi_lr["coef_H"].abs()).sort_values("abs_H", ascending=False).head(10)
         print(top[["coef_H", "coef_D", "coef_A"]].to_string(float_format=lambda x: f"{x:+.3f}"))
+
+    fi_gbm = gbm.feature_importance_
+    if fi_gbm is not None:
+        print("\nGBM — top 10 features by gain (total loss reduction across splits):")
+        print(fi_gbm.head(10).to_string(index=False))
 
 
 def main() -> None:
@@ -144,8 +161,12 @@ def main() -> None:
         stream=sys.stdout,
     )
     parser = argparse.ArgumentParser(description="Run the H/D/A modelling pipeline")
-    parser.add_argument("--target-league", type=int, default=DEFAULT_TARGET_LEAGUE,
-                        help=f"League ID to model (default: {DEFAULT_TARGET_LEAGUE} = Premier League)")
+    parser.add_argument(
+        "--target-leagues", type=str, default=str(DEFAULT_TARGET_LEAGUE),
+        help="Comma-separated league IDs, or the literal 'top5' for the "
+             "top-5 European first tiers (PL, La Liga, Serie A, Bundesliga, "
+             "Ligue 1). Default: 39 (Premier League only).",
+    )
     parser.add_argument("--include-cups", action="store_true",
                         help="Include cup matches in target (default: exclude)")
     parser.add_argument("--cutoff", type=str, default=TRAIN_CUTOFF.date().isoformat(),
@@ -155,8 +176,13 @@ def main() -> None:
     args = parser.parse_args()
 
     cutoff = datetime.fromisoformat(args.cutoff)
+    if args.target_leagues.strip().lower() == "top5":
+        league_ids = TOP5_EUROPEAN
+    else:
+        league_ids = frozenset(int(s.strip()) for s in args.target_leagues.split(","))
+
     run(
-        target_league=args.target_league,
+        target_league_ids=league_ids,
         include_cups=args.include_cups,
         cutoff=cutoff,
         n_boot=args.boot,
