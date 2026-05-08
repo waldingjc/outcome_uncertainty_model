@@ -219,9 +219,12 @@ def run_and_plot(
         )
         out_path = _FIGURES_DIR / f"model_evaluation_{leagues_label}.png"
 
-    league_str = ", ".join(str(x) for x in sorted(target_league_ids))
+    if len(target_league_ids) <= 8:
+        league_str = ", ".join(str(x) for x in sorted(target_league_ids))
+    else:
+        league_str = f"{len(target_league_ids)} senior club domestic leagues"
     suptitle = (
-        f"H/D/A model evaluation — leagues: {league_str}\n"
+        f"H/D/A model evaluation — {league_str}\n"
         f"train: {len(train):,} matches  ·  test: {len(test):,} matches"
     )
     return plot_evaluation(results, out_path, n_boot=n_boot, suptitle=suptitle)
@@ -242,10 +245,15 @@ def main() -> None:
     parser.add_argument("--boot", type=int, default=1000)
     args = parser.parse_args()
 
-    from src.model.data import DEFAULT_TARGET_LEAGUE, TOP5_EUROPEAN
+    from src.model.data import (
+        DEFAULT_TARGET_LEAGUE, TOP5_EUROPEAN, all_domestic_club_leagues,
+    )
 
-    if args.target_leagues.strip().lower() == "top5":
+    target = args.target_leagues.strip().lower()
+    if target == "top5":
         league_ids = TOP5_EUROPEAN
+    elif target == "all":
+        league_ids = all_domestic_club_leagues()
     else:
         league_ids = frozenset(int(s.strip()) for s in args.target_leagues.split(","))
 

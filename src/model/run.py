@@ -176,8 +176,16 @@ def main() -> None:
     args = parser.parse_args()
 
     cutoff = datetime.fromisoformat(args.cutoff)
-    if args.target_leagues.strip().lower() == "top5":
+    target = args.target_leagues.strip().lower()
+    if target == "top5":
         league_ids = TOP5_EUROPEAN
+    elif target == "all":
+        from src.model.data import all_domestic_club_leagues
+        league_ids = all_domestic_club_leagues()
+        logger.info(
+            "--target-leagues all -> %d senior club domestic leagues",
+            len(league_ids),
+        )
     else:
         league_ids = frozenset(int(s.strip()) for s in args.target_leagues.split(","))
 

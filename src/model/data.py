@@ -44,6 +44,22 @@ TOP5_EUROPEAN: frozenset[int] = frozenset({
     61,   # Ligue 1
 })
 
+# International (national-team) and continental club competitions. These
+# share IDs in api-football's lower numbers (1-37). Excluded from
+# modelling targets because:
+#   * National-team competitions involve a different population (countries,
+#     not clubs) — not directly comparable.
+#   * Continental club competitions (UCL, Europa, Libertadores, etc.) are
+#     useful for Elo computation (genuine inter-league strength signal)
+#     but not for predicting a domestic-league outcome.
+# These are still kept in the Elo *corpus* — see load_fixtures_for_elo —
+# so PL teams' UCL form still influences their pre-match Elo.
+INTERNATIONAL_AND_CONTINENTAL: frozenset[int] = frozenset({
+    1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20,
+    22, 24, 25, 27, 28,
+    29, 30, 31, 32, 33, 34, 35, 36, 37,  # WC / AFCON / Asian Cup qualifiers
+})
+
 # Leagues entirely excluded from BOTH Elo computation and training.
 # These don't represent normal competitive senior club football and would
 # only add noise to ratings.
@@ -139,6 +155,34 @@ def load_fixtures_for_elo(
     """
     df = _load_all()
     return df[~df["league_id"].isin(set(excluded))].reset_index(drop=True)
+
+
+def all_domestic_club_leagues(
+    min_matches: int = 100,
+    excluded: Iterable[int] = EXCLUDED_FROM_ELO,
+) -> frozenset[int]:
+    """Discover all senior-club domestic-league IDs in the database.
+
+    Filters out:
+      * EXCLUDED_FROM_ELO (friendlies, youth, women's)
+      * INTERNATIONAL_AND_CONTINENTAL (1-37 range — national teams + UCL/EL/etc.)
+      * Cup competitions (detected by name: 'cup', 'pokal', 'coupe', etc.)
+      * Leagues with fewer than `min_matches` fixtures in the dataset
+        (avoids a sparse league dragging the model around).
+
+    Use as `--target-leagues all`.
+    """
+    df = _load_all()
+    leagues = df.groupby("league_id").agg(
+        name=("league_name", "first"),
+        n=("fixture_id", "size"),
+        is_cup=("is_cup", "first"),
+    )
+    leagues = leagues[~leagues.index.isin(set(excluded))]
+    leagues = leagues[~leagues.index.isin(INTERNATIONAL_AND_CONTINENTAL)]
+    leagues = leagues[~leagues["is_cup"]]
+    leagues = leagues[leagues["n"] >= min_matches]
+    return frozenset(int(x) for x in leagues.index.tolist())
 
 
 def load_training_fixtures(
