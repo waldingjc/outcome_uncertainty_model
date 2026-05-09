@@ -72,7 +72,7 @@ $task = Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Outcome Uncertainty Model — daily api-football fixture backfill. Fires 10 minutes after logon, runs the historical backfill, exits cleanly when daily quota is exhausted." `
+    -Description "Outcome Uncertainty Model - daily api-football fixture backfill. Fires 10 minutes after logon, runs the historical backfill, exits cleanly when daily quota is exhausted." `
     -Force
 
 Write-Output "Registered task: $TaskName"
