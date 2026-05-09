@@ -101,7 +101,11 @@ def run(
     )
 
     # ---- 5. Build features (leakage-safe by construction) ------------------
-    features = build_features(target, elo_with_pre)
+    # league_seeds is computed from pre-cutoff data only, so passing it as
+    # `league_strength` here doesn't introduce leakage — it's the same
+    # seeding info already used for team Elo, just exposed as a per-league
+    # rating that the promotion/relegation features can reference.
+    features = build_features(target, elo_with_pre, league_strength=league_seeds)
     logger.info("Features built: %d rows × %d cols", *features.shape)
 
     # ---- 6. Time-based train/test split ------------------------------------

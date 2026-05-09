@@ -42,6 +42,36 @@ class _PerMatchTeamRecord:
     opp_pre_elo: float
 
 
+def _build_team_season_primary_league(
+    history_df: pd.DataFrame,
+) -> dict[tuple[int, int], int]:
+    """Per (team_id, season), return the league this team played the most in.
+
+    Used to detect promotion/relegation: a team's primary league for the
+    current season vs the previous season tells us if they're newly arrived
+    in this tier. Some teams play in multiple competitions in a season
+    (league + cups + Europe) — we take the league with the most matches as
+    the "primary" for that season.
+    """
+    home = history_df[["home_team_id", "season", "league_id"]].rename(
+        columns={"home_team_id": "team_id"}
+    )
+    away = history_df[["away_team_id", "season", "league_id"]].rename(
+        columns={"away_team_id": "team_id"}
+    )
+    stacked = pd.concat([home, away], ignore_index=True)
+    counts = (
+        stacked.groupby(["team_id", "season", "league_id"])
+        .size().rename("n").reset_index()
+        .sort_values(["team_id", "season", "n"], ascending=[True, True, False])
+    )
+    primary = counts.drop_duplicates(["team_id", "season"], keep="first")
+    return {
+        (int(row["team_id"]), int(row["season"])): int(row["league_id"])
+        for _, row in primary.iterrows()
+    }
+
+
 def _build_team_history(history_df: pd.DataFrame) -> dict[int, list[_PerMatchTeamRecord]]:
     """Per-team chronological list of all their matches, normalised so each
     record is from the team's own POV (won/drew, gf/ga, etc.)."""
@@ -169,6 +199,7 @@ def build_features(
     history_df: pd.DataFrame,
     form_windows: Iterable[int] = DEFAULT_FORM_WINDOWS,
     home_advantage: float = 70.0,
+    league_strength: dict[int, float] | None = None,
 ) -> pd.DataFrame:
     """Build a feature matrix with one row per row in `target_df`.
 
@@ -181,13 +212,17 @@ def build_features(
         form_windows: lookback sizes for form aggregates. Default (5, 10).
         home_advantage: Elo points added to home team's rating when computing
             the elo_gap derived feature.
-
-    Returns:
-        DataFrame: one row per target fixture, with feature columns and a
-            string `result` column ('H', 'D', 'A').
+        league_strength: optional `{league_id: rating}` mapping (typically
+            the output of `compute_league_elo`). When provided, two extra
+            features are emitted per team: `home_league_strength_change` /
+            `away_league_strength_change` — the Elo delta from the team's
+            previous-season primary league to this season's. Captures the
+            "newly promoted to a tougher league" effect that vanilla Elo
+            understates.
     """
     form_windows = tuple(form_windows)
     history_by_team = _build_team_history(history_df)
+    team_season_league = _build_team_season_primary_league(history_df)
 
     rows: list[dict] = []
     for tgt in target_df.itertuples():
@@ -204,6 +239,34 @@ def build_features(
             away_id, target_date, target_season, False,
             history_by_team.get(away_id, []), form_windows,
         )
+
+        # Promotion/relegation features: did this team change its primary
+        # league between last season and this one?
+        for prefix, team_id in (("home", home_id), ("away", away_id)):
+            curr = team_season_league.get((team_id, target_season))
+            prev = team_season_league.get((team_id, target_season - 1))
+            if curr is None or prev is None:
+                # First season we've seen this team — no signal available.
+                feats_extra = {
+                    "league_changed": np.nan,
+                    "league_strength_change": np.nan,
+                }
+            else:
+                feats_extra = {
+                    "league_changed": 1.0 if curr != prev else 0.0,
+                    "league_strength_change": (
+                        (league_strength.get(curr, np.nan)
+                         - league_strength.get(prev, np.nan))
+                        if league_strength is not None else np.nan
+                    ),
+                }
+            for k, v in feats_extra.items():
+                # Merge into the relevant feature dict so the existing
+                # naming convention (home_*, away_*) holds downstream.
+                if prefix == "home":
+                    h_feats[k] = v
+                else:
+                    a_feats[k] = v
 
         row: dict[str, float] = {
             "fixture_id": int(tgt.fixture_id),
@@ -246,6 +309,14 @@ def build_features(
         row["matches_last_14d_gap"] = _gap("home_matches_last_14d", "away_matches_last_14d")
         row["venue_form_5_winrate_gap"] = _gap(
             "home_venue_form_5_winrate", "away_venue_form_5_winrate",
+        )
+
+        # Promotion/relegation gap: positive = home team stepped up more
+        # than away (or stayed the same while away dropped). The vanilla
+        # Elo will already partially capture this via league seeds; the
+        # explicit feature gives the model a direct signal.
+        row["league_strength_change_gap"] = _gap(
+            "home_league_strength_change", "away_league_strength_change",
         )
 
         rows.append(row)

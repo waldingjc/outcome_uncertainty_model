@@ -76,6 +76,10 @@ CURATED_FEATURES: tuple[str, ...] = (
     "matches_last_14d_gap",
     "home_season_match_n",
     "away_season_match_n",
+    # Promotion/relegation: did each team change tier this season?
+    "home_league_changed",
+    "away_league_changed",
+    "league_strength_change_gap",
 )
 
 

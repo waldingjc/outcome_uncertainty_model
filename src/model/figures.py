@@ -196,7 +196,7 @@ def run_and_plot(
     if "is_cup" in target.columns:
         target = target[~target["is_cup"]].reset_index(drop=True)
 
-    features = build_features(target, elo_with_pre)
+    features = build_features(target, elo_with_pre, league_strength=seeds_by_league)
     train, test = time_split(features, SplitConfig(cutoff=cutoff))
     y_train, y_test = train["result"], test["result"]
 
