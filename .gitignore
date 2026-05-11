@@ -211,3 +211,6 @@ data/
 
 # Claude Code worktree + session metadata.
 .claude/
+
+# Personal study notes / project walkthrough — not for the public repo.
+notes/

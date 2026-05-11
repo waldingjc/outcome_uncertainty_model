@@ -35,6 +35,16 @@ DEFAULT_K = 20
 DEFAULT_HOME_ADVANTAGE = 70
 DEFAULT_BASE_RATING = 1500
 
+# Time-decay half-life. Every match, a team's rating is pulled back toward
+# DEFAULT_BASE_RATING by an amount that achieves 50% deviation reduction
+# every `DEFAULT_DECAY_HALF_LIFE_DAYS` days idle. Without this, a club that
+# was elite in 2016 (e.g. Leicester) retains its rating forever even after
+# squad turnover, relegations, etc. — clearly wrong. Default 730 days (2
+# years) is a reasonable football-specific choice; over a single season's
+# off-break (~3 months) it shrinks ~9% of the deviation. Set to None or
+# 0 to disable decay entirely.
+DEFAULT_DECAY_HALF_LIFE_DAYS = 730
+
 # Initial Elo per league (by league_id), used to seed each team based on their
 # primary league before the Elo walk. Without this, the algorithm cannot tell
 # that the Northern Premier League is weaker than Ligue 1, because matches
@@ -316,6 +326,8 @@ def compute_elo_ratings(
     home_advantage: float = DEFAULT_HOME_ADVANTAGE,
     base_rating: float = DEFAULT_BASE_RATING,
     seeding: str = "hardcoded",
+    team_seeds: dict[int, float] | None = None,
+    decay_half_life_days: float | None = DEFAULT_DECAY_HALF_LIFE_DAYS,
 ) -> tuple[pd.DataFrame, dict[int, float]]:
     """Walk matches chronologically, updating Elo ratings.
 
@@ -326,18 +338,37 @@ def compute_elo_ratings(
             - "league_elo": run `compute_league_elo` first to produce
               data-driven league ratings, then seed teams from those.
             - "uniform":  every team starts at base_rating (1500).
+            (Ignored if `team_seeds` is supplied.)
+        team_seeds: optional explicit map of {team_id: starting_rating}.
+            Overrides `seeding`. Use this when seeds were derived from a
+            pre-test-cutoff slice of data to avoid look-ahead leakage in
+            time-series modelling.
+        decay_half_life_days: time-decay half-life. Whenever a team's rating
+            is read for a new match, it's first pulled toward base_rating
+            using:
+                rating' = base + (rating - base) * 0.5 ** (days_idle / half_life)
+            Pass None or 0 to disable decay entirely (the original
+            "static memory" Elo). Default 730 days (2 years).
 
     Returns:
         df_out:  copy of `df` sorted by date, with two new columns
                  `home_pre_elo` and `away_pre_elo` — each team's rating BEFORE
                  the match (used downstream for upset detection).
-        ratings: final rating per team_id after all matches.
+        ratings: final rating per team_id after all matches. Note: these
+                 are the post-decay-and-update ratings as of each team's
+                 last match — they do NOT include further decay to "now".
     """
     df = df.sort_values("date").reset_index(drop=True).copy()
-    if seeding == "uniform":
-        ratings: dict[int, float] = {}
+    if team_seeds is not None:
+        ratings: dict[int, float] = dict(team_seeds)
+    elif seeding == "uniform":
+        ratings = {}
     else:
         ratings = _seed_team_ratings(df, base_rating, mode=seeding)
+
+    # Track each team's last-update date for time-decay.
+    last_update: dict[int, np.datetime64] = {}
+    decay_enabled = decay_half_life_days is not None and decay_half_life_days > 0
     pre_home = np.empty(len(df), dtype=float)
     pre_away = np.empty(len(df), dtype=float)
 
@@ -345,12 +376,30 @@ def compute_elo_ratings(
     away_ids = df["away_team_id"].values
     home_goals = df["home_goals"].values
     away_goals = df["away_goals"].values
+    dates = df["date"].values  # numpy datetime64
+
+    def _decay_to(team_id: int, current_date) -> float:
+        """Pull a team's rating toward base_rating by elapsed time."""
+        if not decay_enabled:
+            return ratings.get(team_id, base_rating)
+        rating = ratings.get(team_id, base_rating)
+        last = last_update.get(team_id)
+        if last is None:
+            return rating
+        days_idle = (current_date - last) / np.timedelta64(1, "D")
+        if days_idle <= 0:
+            return rating
+        factor = 0.5 ** (days_idle / decay_half_life_days)
+        return base_rating + (rating - base_rating) * factor
 
     for i in range(len(df)):
         h_id = int(home_ids[i])
         a_id = int(away_ids[i])
-        h = ratings.get(h_id, base_rating)
-        a = ratings.get(a_id, base_rating)
+        match_date = dates[i]
+
+        # Read decayed pre-match ratings (this is what the model sees at kickoff)
+        h = _decay_to(h_id, match_date)
+        a = _decay_to(a_id, match_date)
         pre_home[i] = h
         pre_away[i] = a
 
@@ -363,8 +412,14 @@ def compute_elo_ratings(
             actual_h = 0.5
 
         delta = k * (actual_h - expected_h)
+        # Write back decayed-then-updated rating, with the current match
+        # date as the new "last update". This means the next time we see
+        # this team, decay measures from now.
         ratings[h_id] = h + delta
         ratings[a_id] = a - delta
+        if decay_enabled:
+            last_update[h_id] = match_date
+            last_update[a_id] = match_date
 
     df["home_pre_elo"] = pre_home
     df["away_pre_elo"] = pre_away
