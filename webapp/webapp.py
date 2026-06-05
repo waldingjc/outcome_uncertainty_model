@@ -8,10 +8,22 @@ from __future__ import annotations
 
 import reflex as rx
 
-from webapp import style
+from webapp import _figures, style
 from webapp.pages.home import home
+from webapp.pages.leagues import leagues
+from webapp.pages.model import model_dashboard
+from webapp.pages.pipeline import pipeline
 from webapp.pages.team import team
 from webapp.state.db import DBState
+from webapp.state.leagues import LeagueState
+from webapp.state.model import ModelState
+from webapp.state.pipeline import PipelineState
+
+
+# Make matplotlib figures available as static assets before the first
+# page render. sync_figures() copies any new PNGs from data/figures/
+# into assets/figures/, where Reflex serves them at /figures/<name>.
+_figures.sync_figures()
 
 
 # Theme — passed once at App construction time. Reflex applies it
@@ -29,8 +41,8 @@ app = rx.App(
 
 
 # Pages — each `app.add_page(...)` registers a route. The `on_load` arg
-# fires when the page mounts; we use it to refresh DB stats so the home
-# page's KPIs always reflect the latest data.
+# fires when the page mounts; we use it to refresh data from disk/SQLite
+# so the page reflects the current state of the project.
 
 app.add_page(
     home,
@@ -45,6 +57,23 @@ app.add_page(
     title="Team breakdown · Outcome Uncertainty Model",
 )
 
-# Other pages (leagues, model, pipeline) are placeholders we'll wire up
-# once their state modules exist. For now they 404 — easier than
-# half-built pages distracting from the working ones.
+app.add_page(
+    leagues,
+    route="/leagues",
+    title="League ladders · Outcome Uncertainty Model",
+    on_load=LeagueState.on_load,
+)
+
+app.add_page(
+    model_dashboard,
+    route="/model",
+    title="Model dashboard · Outcome Uncertainty Model",
+    on_load=ModelState.on_load,
+)
+
+app.add_page(
+    pipeline,
+    route="/pipeline",
+    title="Pipeline status · Outcome Uncertainty Model",
+    on_load=PipelineState.on_load,
+)

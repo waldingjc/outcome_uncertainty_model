@@ -18,7 +18,7 @@ def _hero() -> rx.Component:
                 size="8",
                 weight="bold",
             ),
-            rx.badge("Free tier", color_scheme="teal", variant="surface", size="2"),
+            rx.badge("Free tier", color_scheme="orange", variant="surface", size="2"),
             spacing="3",
             align="center",
         ),
@@ -51,7 +51,7 @@ def _queue_card() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.hstack(
-                rx.icon("list-checks", size=18, color=rx.color("teal", 10)),
+                rx.icon("list-checks", size=18, color=rx.color("orange", 10)),
                 rx.text("Ingestion queue",
                         size="2", weight="medium",
                         color=rx.color("gray", 12)),
@@ -60,14 +60,14 @@ def _queue_card() -> rx.Component:
                     DBState.queue_pct_str,
                     size="2",
                     weight="bold",
-                    color=rx.color("teal", 11),
+                    color=rx.color("orange", 11),
                 ),
                 align="center",
                 width="100%",
             ),
             rx.progress(
                 value=DBState.queue_progress_value,
-                color_scheme="teal",
+                color_scheme="orange",
                 size="2",
                 width="100%",
             ),
@@ -106,7 +106,7 @@ def _last_run_card() -> rx.Component:
     """The last scheduled-run status line."""
     return rx.card(
         rx.hstack(
-            rx.icon("clock", size=18, color=rx.color("teal", 10)),
+            rx.icon("clock", size=18, color=rx.color("orange", 10)),
             rx.vstack(
                 rx.text(
                     "Most recent backfill",

@@ -1,13 +1,13 @@
 """Theme constants for the webapp.
 
-We use Reflex's Radix-based theme system. The accent + grey are chosen to
-echo the matplotlib figure palette (teal #264653 + green #2A9D8F) so the
-web app and the static figures feel like one product.
+We use Reflex's Radix-based theme system. Accent is orange — picked for
+visual identity, paired with a slightly warm grey to keep dark mode from
+feeling clinical.
 """
 
 # Theme — passed to rx.theme() in webapp.py
 THEME_APPEARANCE = "dark"
-THEME_ACCENT_COLOR = "teal"
+THEME_ACCENT_COLOR = "orange"
 THEME_GRAY_COLOR = "slate"
 THEME_RADIUS = "medium"
 THEME_PANEL_BACKGROUND = "solid"

@@ -227,7 +227,65 @@ def run_and_plot(
         f"H/D/A model evaluation — {league_str}\n"
         f"train: {len(train):,} matches  ·  test: {len(test):,} matches"
     )
-    return plot_evaluation(results, out_path, n_boot=n_boot, suptitle=suptitle)
+    plot_evaluation(results, out_path, n_boot=n_boot, suptitle=suptitle)
+
+    # Sidecar JSON with the same stem, for non-figure consumers (e.g. the
+    # webapp's model dashboard) to read the metrics without re-running the
+    # whole pipeline. Contains per-model point estimates + bootstrap CIs.
+    _write_sidecar(
+        out_path, results, league_ids=target_league_ids,
+        n_train=len(train), n_test=len(test),
+        league_str=league_str, n_boot=n_boot,
+    )
+    return out_path
+
+
+def _write_sidecar(
+    out_path: Path,
+    results: list[ModelResult],
+    league_ids: frozenset[int],
+    n_train: int,
+    n_test: int,
+    league_str: str,
+    n_boot: int,
+) -> None:
+    """Write a `<figure_stem>.json` next to the PNG with metric values.
+
+    The webapp's model dashboard reads this to populate its KPI cards
+    without having to recompute Elo / fit models on every page view.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    payload: dict = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "scope_label": league_str,
+        "league_ids": sorted(int(x) for x in league_ids),
+        "n_train": int(n_train),
+        "n_test": int(n_test),
+        "n_boot": int(n_boot),
+        "models": {},
+    }
+    for r in results:
+        ll = r.metric(log_loss, n_boot=n_boot)
+        br = r.metric(brier_score, n_boot=n_boot)
+        from src.model.evaluate import accuracy as _acc
+        ac = r.metric(_acc, n_boot=n_boot)
+        ece = expected_calibration_error(r.y_true, r.probs)
+        tb  = tail_brier(r.y_true, r.probs, threshold=0.10)
+        payload["models"][r.name] = {
+            "log_loss":   ll["point"],
+            "log_loss_ci": [ll["lo"], ll["hi"]],
+            "brier":      br["point"],
+            "brier_ci":   [br["lo"], br["hi"]],
+            "accuracy":   ac["point"],
+            "ece":        float(ece),
+            "tail_brier": float(tb["tail_brier"]) if tb else None,
+            "tail_n_cells": int(tb["n_cells"]) if tb else 0,
+        }
+
+    json_path = out_path.with_suffix(".json")
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def main() -> None:

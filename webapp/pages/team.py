@@ -56,7 +56,7 @@ def _team_header() -> rx.Component:
             rx.heading(TeamState.team_name, size="6", weight="bold"),
             rx.badge(
                 TeamState.primary_league,
-                color_scheme="teal",
+                color_scheme="orange",
                 variant="surface",
                 size="2",
             ),
@@ -104,7 +104,7 @@ def _recent_matches_table() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.hstack(
-                rx.icon("calendar-days", size=18, color=rx.color("teal", 10)),
+                rx.icon("calendar-days", size=18, color=rx.color("orange", 10)),
                 rx.text(
                     "Recent matches (last 15)",
                     size="2",

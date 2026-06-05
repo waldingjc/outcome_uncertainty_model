@@ -33,7 +33,7 @@ def sidebar() -> rx.Component:
     return rx.vstack(
         # Branding
         rx.hstack(
-            rx.icon("activity", size=24, color=rx.color("teal", 9)),
+            rx.icon("activity", size=24, color=rx.color("orange", 9)),
             rx.heading("Outcome", size="5", weight="bold"),
             spacing="2",
             align="center",

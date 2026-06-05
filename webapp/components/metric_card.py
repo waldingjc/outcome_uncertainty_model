@@ -19,7 +19,7 @@ def metric_card(
         icon:   optional Lucide icon name (e.g. "trophy", "users", "database")
         accent: if True, value uses the theme accent color instead of default
     """
-    value_color = rx.color("teal", 11) if accent else rx.color("gray", 12)
+    value_color = rx.color("orange", 11) if accent else rx.color("gray", 12)
 
     return rx.card(
         rx.vstack(
