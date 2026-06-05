@@ -28,6 +28,35 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+# Reflex's frontend dev server is Vite under the hood, and Vite refuses
+# requests whose Host header isn't an address it's bound to (a DNS-
+# rebinding mitigation). The random *.trycloudflare.com hostname trips
+# that check every time. Patch the generated vite.config to allow any
+# host — we're already gated behind cloudflared, the extra check is
+# noise for our use case.
+function Enable-AllHosts-In-ViteConfig {
+    param([string]$RepoRoot)
+    $configPath = Join-Path $RepoRoot ".web\vite.config.js"
+    if (-not (Test-Path $configPath)) {
+        # .web/ gets regenerated on first `reflex run`. We don't bail —
+        # the first reflex start below will create it, and the script
+        # retries the patch after that initial build.
+        return $false
+    }
+    $content = Get-Content $configPath -Raw
+    if ($content -match "allowedHosts") {
+        return $true   # already patched
+    }
+    $patched = $content -replace "(server\s*:\s*\{)", "`$1`r`n    allowedHosts: true,"
+    if ($patched -eq $content) {
+        Write-Warning "Could not locate `server: {` in vite.config.js to patch."
+        return $false
+    }
+    Set-Content -Path $configPath -Value $patched -NoNewline -Encoding utf8
+    Write-Host "  patched .web/vite.config.js (allowedHosts: true)" -ForegroundColor DarkGray
+    return $true
+}
+
 # Confirm cloudflared is installed before we kick anything off.
 $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
 if (-not $cloudflared) {
@@ -108,6 +137,31 @@ Write-Host ""
 
 $env:REFLEX_API_URL = $backendTunnel.Url
 
+# Try patching now in case .web/ already exists from a prior run.
+$patched = Enable-AllHosts-In-ViteConfig -RepoRoot $repoRoot
+
+# Background watcher — reflex regenerates .web/vite.config.js on first
+# start (and after some config changes), which would clobber our patch.
+# Poll for 30 seconds and re-apply if needed; that's long enough for
+# reflex's initial Bun install + Vite scaffolding even on a cold machine.
+$watcherJob = Start-Job -ScriptBlock {
+    param($RepoRoot)
+    $configPath = Join-Path $RepoRoot ".web\vite.config.js"
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        if (Test-Path $configPath) {
+            $content = Get-Content $configPath -Raw
+            if ($content -notmatch "allowedHosts") {
+                $patched = $content -replace "(server\s*:\s*\{)", "`$1`r`n    allowedHosts: true,"
+                if ($patched -ne $content) {
+                    Set-Content -Path $configPath -Value $patched -NoNewline -Encoding utf8
+                }
+            }
+        }
+    }
+} -ArgumentList $repoRoot
+
 try {
     Set-Location $repoRoot
     py -3.14 -m reflex run
@@ -117,5 +171,7 @@ finally {
     foreach ($p in $tunnelPids) {
         Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
     }
+    Stop-Job -Job $watcherJob -ErrorAction SilentlyContinue
+    Remove-Job -Job $watcherJob -Force -ErrorAction SilentlyContinue
     Write-Host "Tunnels stopped." -ForegroundColor DarkGray
 }
