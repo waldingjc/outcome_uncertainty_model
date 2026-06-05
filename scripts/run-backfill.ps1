@@ -145,7 +145,16 @@ function Format-Summary {
     $totalQueue = $pending + $completed + $noAccess + $failed
     $pctDone = if ($totalQueue -gt 0) { [int]([math]::Round(100 * ($completed + $noAccess) / $totalQueue)) } else { 0 }
 
-    if ($Summary.skipped_pre_flight) {
+    # `skipped_pre_flight` is only present in the summary JSON when the
+    # pre-flight check actually triggered — on a normal successful run
+    # it's absent. Strict mode treats a missing property as an error, so
+    # check for existence before reading. Same defensive pattern as the
+    # queue counts above.
+    $wasSkipped = $false
+    if ($Summary.PSObject.Properties['skipped_pre_flight']) {
+        $wasSkipped = [bool]$Summary.skipped_pre_flight
+    }
+    if ($wasSkipped) {
         return "Skipped: budget already at $($Summary.daily_calls_remaining). Queue: $completed done, $pending pending ($pctDone%)."
     }
 
