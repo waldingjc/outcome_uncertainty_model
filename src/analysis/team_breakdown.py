@@ -21,6 +21,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import (
+    CONCEDED_COLOR, D_COLOR, L_COLOR, SCORED_COLOR, W_COLOR, apply_dark_style,
+)
 from src.db.schema import get_connection
 
 logger = logging.getLogger(__name__)
@@ -28,11 +31,11 @@ logger = logging.getLogger(__name__)
 _FIGURES_DIR = Path(__file__).parents[2] / "data" / "figures"
 
 _COLORS = {
-    "W": "#2A9D8F",   # green
-    "D": "#E9C46A",   # yellow
-    "L": "#E76F51",   # red
-    "scored":   "#264653",
-    "conceded": "#E76F51",
+    "W": W_COLOR,
+    "D": D_COLOR,
+    "L": L_COLOR,
+    "scored":   SCORED_COLOR,
+    "conceded": CONCEDED_COLOR,
 }
 
 
@@ -165,7 +168,7 @@ def _plot_season_summary(ax, dft):
             ax.bar(
                 x + offset, counts, width=width, bottom=bottom,
                 color=_COLORS[outcome],
-                edgecolor="white", linewidth=1.0,
+                edgecolor="#161719", linewidth=0.8,
                 hatch="" if venue == "home" else "//",
                 label=f"{outcome}" if (i == 0) else None,
             )
@@ -185,10 +188,10 @@ def _plot_goals_distribution(ax, dft):
     mu_s = dft["team_goals"].mean()
     mu_c = dft["opp_goals"].mean()
     ax.hist(dft["team_goals"], bins=bins, color=_COLORS["scored"],
-            alpha=0.65, edgecolor="white",
+            alpha=0.65, edgecolor="#161719",
             label=f"Scored (μ={mu_s:.2f})")
     ax.hist(dft["opp_goals"], bins=bins, color=_COLORS["conceded"],
-            alpha=0.65, edgecolor="white",
+            alpha=0.65, edgecolor="#161719",
             label=f"Conceded (μ={mu_c:.2f})")
     ax.axvline(mu_s, color=_COLORS["scored"], linestyle="--", linewidth=1.4)
     ax.axvline(mu_c, color=_COLORS["conceded"], linestyle="--", linewidth=1.4)
@@ -255,7 +258,7 @@ def _plot_scoreline_heatmap(ax, dft, cap: int = 5):
         pd.crosstab(dft["tg_cap"], dft["og_cap"])
         .reindex(index=range(cap + 1), columns=range(cap + 1), fill_value=0)
     )
-    im = ax.imshow(grid.values, cmap="YlOrRd", origin="lower", aspect="auto")
+    im = ax.imshow(grid.values, cmap="magma", origin="lower", aspect="auto")
     labels = [str(i) if i < cap else f"{cap}+" for i in range(cap + 1)]
     ax.set_xticks(range(cap + 1), labels)
     ax.set_yticks(range(cap + 1), labels)
@@ -269,7 +272,9 @@ def _plot_scoreline_heatmap(ax, dft, cap: int = 5):
             v = grid.values[i, j]
             if v == 0:
                 continue
-            color = "white" if v > vmax * 0.5 else "black"
+            # On magma the bright end is yellow — pick a dark label there
+            # and a light label on the dark end so contrast holds either way.
+            color = "#161719" if v > vmax * 0.55 else "#e6e6e8"
             ax.text(j, i, str(v), ha="center", va="center",
                     color=color, fontsize=9)
     plt.colorbar(im, ax=ax, label="matches", shrink=0.85)
@@ -297,6 +302,7 @@ def _plot_by_competition(ax, dft):
 
 
 def plot_team_breakdown(name: str, dft: pd.DataFrame, out_path: Path) -> None:
+    apply_dark_style()
     fig, axes = plt.subplots(2, 3, figsize=(20, 12), constrained_layout=True)
 
     record = dft["result"].value_counts().reindex(["W", "D", "L"]).fillna(0).astype(int)

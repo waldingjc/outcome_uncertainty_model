@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.analysis.strength import (
     compute_elo_ratings, load_fixtures, primary_league_map,
 )
@@ -210,6 +211,7 @@ def plot_pyramid_silhouettes(team_df: pd.DataFrame, out_path: Path) -> None:
     Layout: 4 columns x 3 rows = 12 panels. Each panel shows that country's
     tiers stacked top-to-bottom (tier 1 at top), horizontal box per tier.
     """
+    apply_dark_style()
     countries = list(PYRAMID.keys())
     n_cols = 4
     n_rows = (len(countries) + n_cols - 1) // n_cols
@@ -285,6 +287,7 @@ def plot_pyramid_metrics(team_df: pd.DataFrame, league_df: pd.DataFrame, out_pat
     """2x2: tier strength gap, mean goals per tier, home-win % per tier,
     draw rate per tier. Cross-country comparison.
     """
+    apply_dark_style()
     fig, axes = plt.subplots(2, 2, figsize=(18, 12), constrained_layout=True)
     fig.suptitle(
         "Cross-country pyramid metrics — how steep is the drop, "

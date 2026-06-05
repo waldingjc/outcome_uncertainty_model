@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.model.evaluate import (
     bootstrap_metric, brier_score, expected_calibration_error,
     log_loss, reliability_data, tail_brier,
@@ -28,11 +29,12 @@ from src.model.evaluate import (
 _FIGURES_DIR = Path(__file__).parents[2] / "data" / "figures"
 
 # Stable colour map across panels so each model is the same colour everywhere.
+# Tuned for the dark theme — saturated enough to read on near-black panels.
 MODEL_COLOURS: dict[str, str] = {
-    "Climatology": "#9D4EDD",  # purple
-    "Elo":         "#264653",  # dark teal
-    "LR":          "#2A9D8F",  # green
-    "GBM":         "#E9C46A",  # gold
+    "Climatology": "#c084fc",  # lilac
+    "Elo":         "#62b6cb",  # cyan-blue (replaces dark teal that was invisible)
+    "LR":          "#76c893",  # green
+    "GBM":         "#f78737",  # orange — headline model gets the accent color
 }
 
 
@@ -60,7 +62,7 @@ def _plot_reliability(ax, results: list[ModelResult], n_bins: int = 12) -> None:
         sizes = [max(8, b.n / 10) for b in bins]  # marker size scales with bin n
         c = MODEL_COLOURS.get(r.name, "black")
         ax.plot(x, y, color=c, linewidth=1.4, alpha=0.85)
-        ax.scatter(x, y, s=sizes, color=c, edgecolors="white",
+        ax.scatter(x, y, s=sizes, color=c, edgecolors="#161719",
                    linewidths=0.6, label=r.name, zorder=5)
 
     ax.set_xlim(0, 1)
@@ -91,7 +93,7 @@ def _plot_metric_bars(
         y, df["point"],
         xerr=[err_low, err_high],
         color=[MODEL_COLOURS.get(n, "grey") for n in df["name"]],
-        ecolor="black", capsize=4, height=0.6,
+        ecolor="#e6e6e8", capsize=4, height=0.6,
     )
     ax.set_yticks(y, df["name"])
     ax.set_xlabel(ylabel)
@@ -135,6 +137,7 @@ def plot_evaluation(
     n_boot: int = 1000, suptitle: str | None = None,
 ) -> Path:
     """Produce the 2x2 evaluation figure."""
+    apply_dark_style()
     fig, axes = plt.subplots(2, 2, figsize=(16, 11), constrained_layout=True)
 
     if suptitle:

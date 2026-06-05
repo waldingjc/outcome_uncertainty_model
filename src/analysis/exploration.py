@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.analysis.strength import (
     compute_elo_ratings, load_fixtures, primary_league_map, team_name_map,
     DEFAULT_HOME_ADVANTAGE,
@@ -327,6 +328,7 @@ def main():
     df_elo, _ = compute_elo_ratings(df, seeding=args.seeding)
     logger.info("Loaded %d fixtures, seeding=%s", len(df), args.seeding)
 
+    apply_dark_style()
     fig, axes = plt.subplots(3, 2, figsize=(20, 18), constrained_layout=True)
     fig.suptitle(
         f"Exploration & records — {len(df):,} matches across "

@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.db.schema import get_connection
 
 logger = logging.getLogger(__name__)
@@ -808,6 +809,7 @@ def main():
     pr_df = promotion_relegation_pairs(df)
     logger.info("Found %d promotion/relegation pairs", len(pr_df))
 
+    apply_dark_style()
     fig, axes = plt.subplots(2, 3, figsize=(28, 14), constrained_layout=True)
     fig.suptitle(
         f"Team strength — {len(df):,} matches, {len(ratings):,} teams, "

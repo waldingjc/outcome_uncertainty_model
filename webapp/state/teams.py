@@ -4,10 +4,19 @@ When the user types in the search box, we resolve the query to a team_id
 via the existing `find_team()` helper, then compute summary stats and a
 list of recent matches. All operations are synchronous and run on the
 backend; Reflex pushes the updated state to the browser over WebSocket.
+
+On a successful team resolution we also generate the 6-panel matplotlib
+breakdown figure on demand (via `plot_team_breakdown()`), cache it under
+`data/figures/team_<safe>.png`, copy into the assets dir, and surface
+its URL to the page. The plot itself only re-renders when the cached
+file is missing — saves a few seconds per repeat search.
 """
 
 from __future__ import annotations
 
+import logging
+import re
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,8 +24,14 @@ import pandas as pd
 import reflex as rx
 
 from src.analysis.team_breakdown import (
-    find_team, load_fixtures, team_perspective,
+    find_team, load_fixtures, plot_team_breakdown, team_perspective,
 )
+from webapp import _figures
+
+logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).parents[2]
+_FIGURES_DIR = _REPO_ROOT / "data" / "figures"
 
 
 # Cache the fixtures DataFrame at module level — loading 480K rows from
@@ -52,6 +67,11 @@ class TeamState(rx.State):
 
     # ---- Recent matches table -----------------------------------------
     recent_matches: list[dict[str, Any]] = []
+
+    # ---- Breakdown figure ---------------------------------------------
+    # URL of the team-breakdown PNG (served from assets/figures/), empty
+    # if no team is selected or the figure failed to render.
+    figure_url: str = ""
 
     # ---- Error message -------------------------------------------------
     error: str = ""
@@ -158,6 +178,30 @@ class TeamState(rx.State):
         )
         self.recent_matches = recent.to_dict("records")
 
+        # Generate the 6-panel breakdown figure if not already cached.
+        self.figure_url = self._ensure_figure(name, dft)
+
+    def _ensure_figure(self, name: str, dft: pd.DataFrame) -> str:
+        """Return a `/figures/team_<safe>.png` URL, generating the PNG
+        on demand the first time a team is viewed. Subsequent views hit
+        the cached file. Returns "" on failure.
+        """
+        safe = re.sub(r"[^\w\-]+", "_", name).strip("_") or "team"
+        png_name = f"team_{safe}.png"
+        out_path = _FIGURES_DIR / png_name
+
+        if not out_path.exists():
+            try:
+                plot_team_breakdown(name, dft, out_path)
+            except Exception as e:
+                logger.warning("Failed to render team figure for %s: %s", name, e)
+                return ""
+
+        # Mirror into assets/figures/ so Reflex serves it at /figures/<name>.
+        _figures.sync_figures()
+        url = _figures.find_figure(png_name)
+        return url or ""
+
     def _clear(self):
         self.team_id = 0
         self.team_name = ""
@@ -167,3 +211,4 @@ class TeamState(rx.State):
         self.goals_for = self.goals_against = 0
         self.competition_count = 0
         self.recent_matches = []
+        self.figure_url = ""

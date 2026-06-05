@@ -69,20 +69,58 @@ def _controls() -> rx.Component:
     )
 
 
+def _sortable_header(label: str, key: str, width: str | None = None) -> rx.Component:
+    """A clickable column header that wires into LeagueState.sort_by(key).
+    Shows an arrow indicator (↑/↓) when this column is the active sort."""
+    is_active = LeagueState.sort_key == key
+    arrow = rx.cond(
+        is_active,
+        rx.cond(LeagueState.sort_dir == "asc", " ▲", " ▼"),
+        "",
+    )
+    return rx.table.column_header_cell(
+        rx.hstack(
+            rx.text(
+                label,
+                weight=rx.cond(is_active, "bold", "medium"),
+                color=rx.cond(
+                    is_active,
+                    rx.color("orange", 11),
+                    rx.color("gray", 12),
+                ),
+            ),
+            rx.text(
+                arrow,
+                size="1",
+                color=rx.color("orange", 11),
+            ),
+            spacing="1",
+            align="center",
+            style={
+                "cursor": "pointer",
+                "user_select": "none",
+                "_hover": {"color": rx.color("orange", 11)},
+            },
+            on_click=LeagueState.sort_by(key),
+        ),
+        width=width,
+    )
+
+
 def _table_header() -> rx.Component:
     return rx.table.header(
         rx.table.row(
-            rx.table.column_header_cell("#", width="40px"),
-            rx.table.column_header_cell("Team"),
-            rx.table.column_header_cell("P", width="48px"),
-            rx.table.column_header_cell("W", width="48px"),
-            rx.table.column_header_cell("D", width="48px"),
-            rx.table.column_header_cell("L", width="48px"),
-            rx.table.column_header_cell("GF", width="56px"),
-            rx.table.column_header_cell("GA", width="56px"),
-            rx.table.column_header_cell("GD", width="64px"),
-            rx.table.column_header_cell("Pts", width="64px"),
-            rx.table.column_header_cell("Elo", width="80px"),
+            _sortable_header("#",    "pos",  "40px"),
+            _sortable_header("Team", "team"),
+            _sortable_header("P",    "P",   "48px"),
+            _sortable_header("W",    "W",   "48px"),
+            _sortable_header("D",    "D",   "48px"),
+            _sortable_header("L",    "L",   "48px"),
+            _sortable_header("GF",   "GF",  "56px"),
+            _sortable_header("GA",   "GA",  "56px"),
+            _sortable_header("GD",   "GD",  "64px"),
+            _sortable_header("Pts",  "Pts", "64px"),
+            _sortable_header("Elo",  "Elo", "80px"),
         ),
     )
 

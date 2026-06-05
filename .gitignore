@@ -231,3 +231,7 @@ notes/
 # Reflex also keeps a local config cache and per-session state.
 reflex.db
 .states/
+
+# Background regen logs from regenerating figures with the dark style.
+model_regen.log
+

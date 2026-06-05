@@ -3,6 +3,11 @@
 User picks a league + season → we compute the final-position points table
 from `fixtures` via SQL (fast — has indexes) and join in each team's
 final Elo from the module-level cache.
+
+Sorting: column headers are clickable. Clicking a column once sorts
+descending (high-to-low) — that's what makes sense for stats people
+care about (Pts, W, Elo). Clicking again flips to ascending. Clicking
+a different column resets direction to the default for that column.
 """
 
 from __future__ import annotations
@@ -12,6 +17,23 @@ from typing import Any
 import reflex as rx
 
 from webapp import _cache
+
+
+# Default sort direction per column. Pts/wins/etc. default to descending
+# (you want the best at top); position and team name default to ascending.
+_DEFAULT_DIR: dict[str, str] = {
+    "pos":  "asc",
+    "team": "asc",
+    "P":    "desc",
+    "W":    "desc",
+    "D":    "desc",
+    "L":    "desc",
+    "GF":   "desc",
+    "GA":   "asc",   # fewer goals against is better — ascending shows best at top
+    "GD":   "desc",
+    "Pts":  "desc",
+    "Elo":  "desc",
+}
 
 
 class LeagueState(rx.State):
@@ -25,21 +47,49 @@ class LeagueState(rx.State):
     league_options: list[dict[str, str]] = []
     season_options: list[str] = []
 
-    table_rows: list[dict[str, Any]] = []
+    # Source of truth — always stored in natural ladder order (pos asc).
+    # `table_rows` is the rendered view, sorted by the user's chosen column.
+    rows_data: list[dict[str, Any]] = []
+
+    sort_key: str = "pos"
+    sort_dir: str = "asc"   # "asc" or "desc"
 
     # ---- Computed -----------------------------------------------------
 
     @rx.var
     def has_rows(self) -> bool:
-        return len(self.table_rows) > 0
+        return len(self.rows_data) > 0
 
     @rx.var
     def header_str(self) -> str:
-        if not self.table_rows:
+        if not self.rows_data:
             return f"{self.league_name} · {self.season}-{(self.season + 1) % 100:02d}"
         return (
             f"{self.league_name} · {self.season}-{(self.season + 1) % 100:02d}  "
-            f"({len(self.table_rows)} teams)"
+            f"({len(self.rows_data)} teams)"
+        )
+
+    @rx.var
+    def table_rows(self) -> list[dict[str, Any]]:
+        """Rows sorted by the active column. For Elo we sort on the
+        numeric `elo_value` field even though the displayed column is
+        the formatted string."""
+        if not self.rows_data:
+            return []
+        key = self.sort_key
+        reverse = self.sort_dir == "desc"
+
+        if key == "Elo":
+            # Missing Elo (None) goes to the bottom regardless of direction.
+            def k(r):
+                v = r.get("elo_value")
+                return (v is None, v if v is not None else 0)
+            return sorted(self.rows_data, key=k, reverse=reverse)
+
+        return sorted(
+            self.rows_data,
+            key=lambda r: r.get(key, 0),
+            reverse=reverse,
         )
 
     # ---- Event handlers ----------------------------------------------
@@ -76,10 +126,19 @@ class LeagueState(rx.State):
             return
         self._recompute()
 
+    def sort_by(self, key: str):
+        """Toggle sort direction if clicking the active column; otherwise
+        switch to the new column at its natural default direction."""
+        if key == self.sort_key:
+            self.sort_dir = "asc" if self.sort_dir == "desc" else "desc"
+        else:
+            self.sort_key = key
+            self.sort_dir = _DEFAULT_DIR.get(key, "desc")
+
     def _recompute(self):
         df = _cache.league_table(self.league_id, self.season)
         if df.empty:
-            self.table_rows = []
+            self.rows_data = []
             return
 
         ratings = _cache.elo_cache()["ratings"]
@@ -97,6 +156,10 @@ class LeagueState(rx.State):
                 "GA": int(r.GA),
                 "GD": int(r.GD),
                 "Pts": int(r.Pts),
+                # Display value (formatted) + numeric value for sorting.
                 "Elo": f"{elo:.0f}" if elo is not None else "—",
+                "elo_value": float(elo) if elo is not None else None,
             })
-        self.table_rows = rows
+        # Reset to natural order whenever data is reloaded — but keep
+        # whatever sort the user had chosen.
+        self.rows_data = rows

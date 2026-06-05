@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.analysis.strength import (
     compute_elo_ratings, load_fixtures, DEFAULT_HOME_ADVANTAGE,
 )
@@ -215,6 +216,7 @@ def main():
     top = _top_leagues(df_elo)
     logger.info("Top leagues: %s", top[:6])
 
+    apply_dark_style()
     fig, axes = plt.subplots(2, 2, figsize=(20, 14), constrained_layout=True)
     fig.suptitle(
         f"Outcome uncertainty (Elo-aware) — {len(df_elo):,} matches "

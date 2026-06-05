@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.analysis._style import apply_dark_style
 from src.db.schema import get_connection
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ def _ht_flip_rate(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_overview(df: pd.DataFrame, out_path: Path) -> None:
+    apply_dark_style()
     summary = _league_summary(df)
     flip = _ht_flip_rate(df)
 
@@ -164,7 +166,9 @@ def plot_overview(df: pd.DataFrame, out_path: Path) -> None:
     ]
     bp = ax.boxplot(
         data, labels=labels, vert=False, showfliers=False,
-        patch_artist=True, medianprops={"color": "black"},
+        patch_artist=True, medianprops={"color": "#161719"},
+        whiskerprops={"color": "#9aa0a6"},
+        capprops={"color": "#9aa0a6"},
     )
     for patch in bp["boxes"]:
         patch.set_facecolor("#E9C46A")
@@ -172,7 +176,7 @@ def plot_overview(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_title("Goals per match by league\n(box: IQR, whiskers: 1.5×IQR, outliers hidden)")
     for i, lid in enumerate(leagues_in_order, start=1):
         mean = top_goals.set_index("league_id").loc[lid, "mean_total_goals"]
-        ax.text(mean, i, f"  μ={mean:.2f}", va="center", fontsize=8, color="#264653")
+        ax.text(mean, i, f"  μ={mean:.2f}", va="center", fontsize=8, color="#e6e6e8")
 
     # ---- (4) HT-leader flip rate -----------------------------------------
     ax = axes[1, 1]

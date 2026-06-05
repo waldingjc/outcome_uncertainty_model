@@ -172,6 +172,54 @@ def _recent_matches_table() -> rx.Component:
     )
 
 
+def _figure_card() -> rx.Component:
+    """The 6-panel matplotlib breakdown — generated server-side on first
+    search of each team, then cached on disk."""
+    return rx.cond(
+        TeamState.figure_url != "",
+        rx.card(
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("chart-line", size=18, color=rx.color("orange", 10)),
+                    rx.text(
+                        "Visual breakdown",
+                        size="3",
+                        weight="medium",
+                        color=rx.color("gray", 12),
+                    ),
+                    spacing="2",
+                    align="center",
+                    width="100%",
+                ),
+                rx.divider(),
+                rx.image(
+                    src=TeamState.figure_url,
+                    width="100%",
+                    height="auto",
+                    style={
+                        "border_radius": "6px",
+                        "background": rx.color("gray", 1),
+                    },
+                ),
+                rx.text(
+                    "Season-by-season W/D/L, goal distributions, points "
+                    "trajectory, top opponents, scoreline heatmap, and "
+                    "performance by competition.",
+                    size="1",
+                    color=rx.color("gray", 11),
+                ),
+                spacing="3",
+                align="start",
+                width="100%",
+            ),
+            size="3",
+            variant="surface",
+            width="100%",
+        ),
+        rx.fragment(),
+    )
+
+
 def team() -> rx.Component:
     return page(
         _search_bar(),
@@ -181,6 +229,7 @@ def team() -> rx.Component:
                 _team_header(),
                 _kpis(),
                 _recent_matches_table(),
+                _figure_card(),
                 spacing="5",
                 align="start",
                 width="100%",
