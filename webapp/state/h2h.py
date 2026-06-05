@@ -1,32 +1,43 @@
 """State for the head-to-head page.
 
-User types two team names; we resolve each via `find_team()`, filter
-the fixtures dataframe down to matches where both teams played, and
-expose:
-  - aggregate record from team A's perspective (W/D/L, goals)
-  - meeting frequency by competition
-  - all historical meetings as a table (most recent first)
+Supports 2 to MAX_TEAMS (4) teams. The user types into per-slot search
+boxes; we resolve each independently and, once at least two slots are
+filled, filter the fixtures dataframe to matches where *both*
+participants are in the resolved set. Aggregates and a comparison
+figure are then computed off that filtered slice.
 
-Both teams are resolved independently — typing into the box for team
-B doesn't disturb team A. Errors per team are surfaced separately.
+Caps the active team set at 4 to keep the comparison figure readable
+and the resolved-name UI tractable. Empty slots are ignored — typing
+into slot 3 doesn't require slot 4 to be filled.
 """
 
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import reflex as rx
 
+from src.analysis.h2h import plot_h2h_breakdown
 from src.analysis.team_breakdown import find_team, load_fixtures
+from webapp import _figures
 
 logger = logging.getLogger(__name__)
 
+# Cap N teams. 4 lets you compare e.g. the Manchester clubs + the two
+# Merseyside ones without crowding the figure or the meetings table.
+MAX_TEAMS = 4
+INITIAL_SLOTS = 2
 
-# Reuse the same module-level fixtures cache as the team page — saves
-# ~1s of SQLite read per session. We import it lazily so the h2h page
-# doesn't drag a hard dependency on teams.py.
+_REPO_ROOT = Path(__file__).parents[2]
+_FIGURES_DIR = _REPO_ROOT / "data" / "figures"
+
+
+# Module-level fixtures cache — shared with /team via the same lazy
+# loader pattern. ~1s on first call, ~free afterwards.
 _FIXTURES: pd.DataFrame | None = None
 
 
@@ -39,191 +50,257 @@ def _get_fixtures() -> pd.DataFrame:
 
 class H2HState(rx.State):
     # ---- Inputs --------------------------------------------------------
-    query_a: str = ""
-    query_b: str = ""
+    # One query string per visible slot. We track the visible slot count
+    # separately because Reflex needs concrete sized state vars — we
+    # always keep MAX_TEAMS strings but only render the first
+    # `visible_slots` of them.
+    queries: list[str] = ["", ""] + [""] * (MAX_TEAMS - INITIAL_SLOTS)
+    visible_slots: int = INITIAL_SLOTS
 
-    # ---- Resolved teams ------------------------------------------------
-    team_a_id: int = 0
-    team_b_id: int = 0
-    team_a_name: str = ""
-    team_b_name: str = ""
+    # Parallel arrays of resolved ids/names/errors — same length as queries.
+    team_ids: list[int] = [0] * MAX_TEAMS
+    team_names: list[str] = [""] * MAX_TEAMS
+    errors: list[str] = [""] * MAX_TEAMS
 
-    # ---- Aggregates (A perspective) -----------------------------------
+    # ---- Aggregates ----------------------------------------------------
     match_count: int = 0
-    a_wins: int = 0
-    draws: int = 0
-    b_wins: int = 0
-    a_goals: int = 0
-    b_goals: int = 0
-
-    # ---- Meeting history -----------------------------------------------
+    # Per-team record vs the rest of the set — list of dicts so we can
+    # render with rx.foreach on the page.
+    per_team_records: list[dict[str, Any]] = []
+    # Top competitions across all meetings, dict[{league, n}]
+    competitions: list[dict[str, Any]] = []
+    # Recent meetings (capped at 50) — dict[{Date, Competition,
+    # HomeTeam, AwayTeam, Score, Winner}]
     meetings: list[dict[str, Any]] = []
-    competitions: list[dict[str, Any]] = []   # [{league, n}], top 6
 
-    # ---- Errors per slot (so each search bar can show its own) --------
-    error_a: str = ""
-    error_b: str = ""
+    # ---- Figure URL (generated on demand, cached) ----------------------
+    figure_url: str = ""
 
     # ---- Computed display strings -------------------------------------
 
     @rx.var
-    def has_both_teams(self) -> bool:
-        return self.team_a_id != 0 and self.team_b_id != 0
+    def active_team_count(self) -> int:
+        return sum(1 for tid in self.team_ids[:self.visible_slots] if tid != 0)
+
+    @rx.var
+    def has_enough_teams(self) -> bool:
+        return self.active_team_count >= 2
+
+    @rx.var
+    def can_add_slot(self) -> bool:
+        return self.visible_slots < MAX_TEAMS
+
+    @rx.var
+    def can_remove_slot(self) -> bool:
+        return self.visible_slots > INITIAL_SLOTS
+
+    @rx.var
+    def visible_indices(self) -> list[int]:
+        """[0, 1, ..., visible_slots - 1] — used to drive rx.foreach
+        over the search boxes since iterating the per-slot lists
+        directly loses the index we need for set_query_at()."""
+        return list(range(self.visible_slots))
 
     @rx.var
     def match_count_str(self) -> str:
         return f"{self.match_count:,}"
 
     @rx.var
-    def record_str(self) -> str:
-        if self.match_count == 0:
-            return "—"
-        return f"{self.a_wins}W · {self.draws}D · {self.b_wins}L"
-
-    @rx.var
-    def a_win_pct_str(self) -> str:
-        if self.match_count == 0:
-            return "—"
-        return f"{100 * self.a_wins / self.match_count:.1f}%"
-
-    @rx.var
-    def b_win_pct_str(self) -> str:
-        if self.match_count == 0:
-            return "—"
-        return f"{100 * self.b_wins / self.match_count:.1f}%"
-
-    @rx.var
-    def goals_str(self) -> str:
-        """Goals tally — "A : B" totals across all meetings."""
-        if self.match_count == 0:
-            return "—"
-        return f"{self.a_goals} : {self.b_goals}"
-
-    @rx.var
-    def avg_goals_str(self) -> str:
-        if self.match_count == 0:
-            return "—"
-        return f"{(self.a_goals + self.b_goals) / self.match_count:.2f}"
-
-    @rx.var
     def header_str(self) -> str:
-        if self.has_both_teams:
-            return f"{self.team_a_name}  vs  {self.team_b_name}"
+        names = [n for n in self.team_names[:self.visible_slots] if n]
+        if len(names) >= 2:
+            return "  vs  ".join(names)
         return "Head to head"
 
     # ---- Event handlers -----------------------------------------------
 
-    def set_query_a(self, q: str):
-        self.query_a = q
-        self._resolve_a()
+    def set_query_at(self, idx: int, q: str):
+        """Update one slot's query, resolve that slot's team, and
+        recompute the whole set."""
+        if not (0 <= idx < MAX_TEAMS):
+            return
+        # Reflex passes list elements as copies — re-assign to trigger
+        # reactivity on the queries list itself.
+        new_queries = list(self.queries)
+        new_queries[idx] = q
+        self.queries = new_queries
+        self._resolve_slot(idx)
         self._recompute()
 
-    def set_query_b(self, q: str):
-        self.query_b = q
-        self._resolve_b()
-        self._recompute()
+    def add_slot(self):
+        if self.visible_slots < MAX_TEAMS:
+            self.visible_slots += 1
 
-    def _resolve_a(self):
-        if not self.query_a.strip():
-            self.team_a_id = 0
-            self.team_a_name = ""
-            self.error_a = ""
-            return
-        try:
-            tid, name = find_team(self.query_a.strip(), _get_fixtures())
-            self.team_a_id = tid
-            self.team_a_name = name
-            self.error_a = ""
-        except ValueError as e:
-            self.team_a_id = 0
-            self.team_a_name = ""
-            self.error_a = str(e)
+    def remove_slot(self):
+        if self.visible_slots > INITIAL_SLOTS:
+            i = self.visible_slots - 1
+            # Clear out the slot we're dropping so it doesn't sneak
+            # back in as a resolved team.
+            new_queries  = list(self.queries);  new_queries[i] = ""
+            new_ids      = list(self.team_ids); new_ids[i] = 0
+            new_names    = list(self.team_names); new_names[i] = ""
+            new_errors   = list(self.errors); new_errors[i] = ""
+            self.queries = new_queries
+            self.team_ids = new_ids
+            self.team_names = new_names
+            self.errors = new_errors
+            self.visible_slots -= 1
+            self._recompute()
 
-    def _resolve_b(self):
-        if not self.query_b.strip():
-            self.team_b_id = 0
-            self.team_b_name = ""
-            self.error_b = ""
-            return
-        try:
-            tid, name = find_team(self.query_b.strip(), _get_fixtures())
-            self.team_b_id = tid
-            self.team_b_name = name
-            self.error_b = ""
-        except ValueError as e:
-            self.team_b_id = 0
-            self.team_b_name = ""
-            self.error_b = str(e)
+    # ---- Internals ----------------------------------------------------
+
+    def _resolve_slot(self, idx: int):
+        q = self.queries[idx].strip()
+        new_ids   = list(self.team_ids)
+        new_names = list(self.team_names)
+        new_err   = list(self.errors)
+        if not q:
+            new_ids[idx]   = 0
+            new_names[idx] = ""
+            new_err[idx]   = ""
+        else:
+            try:
+                tid, name = find_team(q, _get_fixtures())
+                new_ids[idx]   = tid
+                new_names[idx] = name
+                new_err[idx]   = ""
+            except ValueError as e:
+                new_ids[idx]   = 0
+                new_names[idx] = ""
+                new_err[idx]   = str(e)
+        self.team_ids   = new_ids
+        self.team_names = new_names
+        self.errors     = new_err
+
+    def _active_set(self) -> tuple[list[int], list[str]]:
+        """Return (ids, names) for currently-resolved slots, deduped
+        (a user pasting the same name twice shouldn't cause double-counts)."""
+        seen: set[int] = set()
+        ids: list[int] = []
+        names: list[str] = []
+        for tid, name in zip(self.team_ids[:self.visible_slots],
+                             self.team_names[:self.visible_slots]):
+            if tid != 0 and tid not in seen:
+                ids.append(tid)
+                names.append(name)
+                seen.add(tid)
+        return ids, names
 
     def _recompute(self):
-        if not (self.team_a_id and self.team_b_id):
-            self.match_count = 0
-            self.a_wins = self.draws = self.b_wins = 0
-            self.a_goals = self.b_goals = 0
-            self.meetings = []
-            self.competitions = []
-            return
-        if self.team_a_id == self.team_b_id:
-            # Both inputs resolved to the same team — likely a typo,
-            # show 0 meetings rather than every match the team played.
-            self.match_count = 0
-            self.a_wins = self.draws = self.b_wins = 0
-            self.a_goals = self.b_goals = 0
-            self.meetings = []
-            self.competitions = []
+        ids, names = self._active_set()
+        if len(ids) < 2:
+            self._clear_aggregates()
             return
 
         df = _get_fixtures()
-        a, b = self.team_a_id, self.team_b_id
-        mask = (
-            ((df["home_team_id"] == a) & (df["away_team_id"] == b))
-            | ((df["home_team_id"] == b) & (df["away_team_id"] == a))
-        )
-        h2h = df[mask].sort_values("date", ascending=False).copy()
-        if h2h.empty:
-            self.match_count = 0
-            self.a_wins = self.draws = self.b_wins = 0
-            self.a_goals = self.b_goals = 0
-            self.meetings = []
-            self.competitions = []
-            return
-
-        # Restate each row from team-A's perspective
-        a_is_home = h2h["home_team_id"] == a
-        h2h["a_goals"]    = h2h["home_goals"].where(a_is_home,  h2h["away_goals"])
-        h2h["b_goals"]    = h2h["away_goals"].where(a_is_home,  h2h["home_goals"])
-        h2h["venue_a"]    = a_is_home.map({True: "home", False: "away"})
-        h2h["result_a"]   = "D"
-        h2h.loc[h2h["a_goals"] > h2h["b_goals"], "result_a"] = "W"
-        h2h.loc[h2h["a_goals"] < h2h["b_goals"], "result_a"] = "L"
+        tset = set(ids)
+        h2h = df[
+            df["home_team_id"].isin(tset) & df["away_team_id"].isin(tset)
+        ].sort_values("date", ascending=False).copy()
 
         self.match_count = int(len(h2h))
-        self.a_wins = int((h2h["result_a"] == "W").sum())
-        self.draws  = int((h2h["result_a"] == "D").sum())
-        self.b_wins = int((h2h["result_a"] == "L").sum())
-        self.a_goals = int(h2h["a_goals"].sum())
-        self.b_goals = int(h2h["b_goals"].sum())
+        if h2h.empty:
+            self._clear_aggregates(keep_count=True)
+            return
 
-        # Per-competition breakdown — top 6 by meetings, used for the
-        # "where they've met" chip strip.
+        # ---- Per-team record vs the rest of the set ------------------
+        records: list[dict[str, Any]] = []
+        for tid, name in zip(ids, names):
+            # Restrict to matches involving this team against any other
+            # team in the set.
+            sub = h2h[(h2h["home_team_id"] == tid) | (h2h["away_team_id"] == tid)]
+            home = sub["home_team_id"] == tid
+            tg = sub["home_goals"].where(home, sub["away_goals"])
+            og = sub["away_goals"].where(home, sub["home_goals"])
+            w = int((tg > og).sum())
+            d = int((tg == og).sum())
+            l = int((tg < og).sum())
+            records.append({
+                "team":   name,
+                "P":      int(len(sub)),
+                "W":      w,
+                "D":      d,
+                "L":      l,
+                "GF":     int(tg.sum()),
+                "GA":     int(og.sum()),
+                "Pts":    3 * w + d,
+                "WinPct": f"{(100 * w / len(sub)):.1f}%" if len(sub) else "—",
+            })
+        # Sort by Pts desc, GD desc, so the "leader" of the head-to-head
+        # league rises to the top.
+        records.sort(key=lambda r: (r["Pts"], r["GF"] - r["GA"], r["GF"]),
+                     reverse=True)
+        self.per_team_records = records
+
+        # ---- Competition mix -----------------------------------------
         comp_counts = h2h["league_name"].value_counts().head(6)
         self.competitions = [
-            {"league": name, "n": int(n)} for name, n in comp_counts.items()
+            {"league": str(name), "n": int(n)} for name, n in comp_counts.items()
         ]
 
-        # Recent meetings table (full history, capped at 50 for sanity).
-        rows = h2h.head(50).assign(
-            date_str=lambda d: pd.to_datetime(d["date"]).dt.strftime("%Y-%m-%d"),
-            score=lambda d: d["a_goals"].astype(int).astype(str)
-                + "–"
-                + d["b_goals"].astype(int).astype(str),
-        )[["date_str", "league_name", "venue_a", "score", "result_a"]].rename(
-            columns={
-                "date_str":    "Date",
-                "league_name": "Competition",
-                "venue_a":     "Venue",
-                "score":       "Score",
-                "result_a":    "R",
-            }
+        # ---- Meetings table (cap 50) ---------------------------------
+        rows = h2h.head(50).copy()
+        rows["date_str"] = pd.to_datetime(rows["date"]).dt.strftime("%Y-%m-%d")
+        rows["score"] = (
+            rows["home_goals"].astype(int).astype(str)
+            + "–"
+            + rows["away_goals"].astype(int).astype(str)
         )
-        self.meetings = rows.to_dict("records")
+        # Winner name (or "Draw")
+        name_by_id = dict(zip(ids, names))
+        def _winner(r):
+            if r["home_goals"] > r["away_goals"]:
+                return name_by_id.get(int(r["home_team_id"]), str(r["home_team_name"]))
+            if r["home_goals"] < r["away_goals"]:
+                return name_by_id.get(int(r["away_team_id"]), str(r["away_team_name"]))
+            return "Draw"
+        rows["winner"] = rows.apply(_winner, axis=1)
+
+        self.meetings = rows[[
+            "date_str", "league_name", "home_team_name", "away_team_name",
+            "score", "winner",
+        ]].rename(columns={
+            "date_str":        "Date",
+            "league_name":     "Competition",
+            "home_team_name":  "Home",
+            "away_team_name":  "Away",
+            "score":           "Score",
+            "winner":          "Winner",
+        }).to_dict("records")
+
+        # ---- Comparison figure ---------------------------------------
+        self.figure_url = self._ensure_figure(ids, names, df)
+
+    def _clear_aggregates(self, keep_count: bool = False):
+        if not keep_count:
+            self.match_count = 0
+        self.per_team_records = []
+        self.competitions = []
+        self.meetings = []
+        self.figure_url = ""
+
+    def _ensure_figure(
+        self, team_ids: list[int], team_names: list[str], df: pd.DataFrame,
+    ) -> str:
+        """Render (or fetch from cache) the multi-team comparison
+        figure. Cache key is the sorted-name tuple so order-of-entry
+        doesn't cause redundant renders."""
+        key_parts = ["_".join(re.findall(r"\w+", n)) for n, _ in
+                     sorted(zip(team_names, team_ids), key=lambda x: x[1])]
+        png_name = "h2h_" + "_vs_".join(key_parts) + ".png"
+        # Filesystems aren't kind to extremely long names — cap it.
+        if len(png_name) > 200:
+            png_name = png_name[:196] + ".png"
+        out_path = _FIGURES_DIR / png_name
+
+        if not out_path.exists():
+            try:
+                plot_h2h_breakdown(team_ids, team_names, df, out_path)
+            except Exception as e:
+                logger.warning(
+                    "Failed to render H2H figure for %s: %s", team_names, e,
+                )
+                return ""
+
+        _figures.sync_figures()
+        return _figures.find_figure(png_name) or ""
