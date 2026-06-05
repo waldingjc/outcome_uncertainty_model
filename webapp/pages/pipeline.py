@@ -134,11 +134,7 @@ def _day_cell(row) -> rx.Component:
             ),
             min_width="86px",
         ),
-        content=rx.cond(
-            row["ran"],
-            row["date"] + " — " + row["size_kb"] + " KB log",
-            row["date"] + " — no log",
-        ),
+        content=row["tooltip"],
     )
 
 

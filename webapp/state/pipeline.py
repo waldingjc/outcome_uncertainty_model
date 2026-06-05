@@ -151,9 +151,16 @@ class PipelineState(rx.State):
             d = anchor_date - timedelta(days=delta)
             key = d.isoformat()
             size = existing.get(key, 0)
+            ran = size > 0
+            size_kb = f"{size / 1024:.1f}" if size else "—"
+            # Pre-render the tooltip here — Reflex can't concat Vars + str
+            # inside the page render function, so we build the final text
+            # eagerly while we still have native Python strings.
+            tooltip = f"{key} — {size_kb} KB log" if ran else f"{key} — no log"
             rows.append({
                 "date": key,
-                "size_kb": f"{size / 1024:.1f}" if size else "—",
-                "ran": size > 0,
+                "size_kb": size_kb,
+                "ran": ran,
+                "tooltip": tooltip,
             })
         self.recent_days = rows
