@@ -9,6 +9,7 @@ Reads:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import reflex as rx
@@ -17,6 +18,11 @@ from webapp import _figures
 
 _REPO_ROOT = Path(__file__).parents[2]
 _FIGURES_DIR = _REPO_ROOT / "data" / "figures"
+
+# Match the league-count suffix on figure names like
+# `model_evaluation_671leagues.png` so we can pick the widest-scope
+# regen automatically as the dataset grows.
+_SCOPE_PATTERN = re.compile(r"model_evaluation_(\d+)leagues\.png$")
 
 
 class ModelState(rx.State):
@@ -39,14 +45,22 @@ class ModelState(rx.State):
         # Ensure figures are synced
         _figures.sync_figures()
 
-        # Find the best available model_evaluation figure (largest scope first).
-        # Reflex's static-file URLs are served at the assets root.
-        candidates = [
-            "model_evaluation_143leagues.png",
-            "model_evaluation_115leagues.png",
-            "model_evaluation_5leagues.png",
-            "model_evaluation_PL.png",
-        ]
+        # Pick the model_evaluation figure with the widest scope (highest
+        # league count). Falls back to the PL-only figure if no
+        # multi-league ones exist. Sorting numerically by the
+        # `<N>leagues` suffix means we don't need a code change every
+        # time the dataset grows another tier.
+        scope_files: list[tuple[int, str]] = []
+        if _FIGURES_DIR.exists():
+            for png in _FIGURES_DIR.glob("model_evaluation_*leagues.png"):
+                m = _SCOPE_PATTERN.search(png.name)
+                if m:
+                    scope_files.append((int(m.group(1)), png.name))
+        scope_files.sort(reverse=True)
+
+        candidates = [name for _, name in scope_files]
+        candidates.append("model_evaluation_PL.png")  # last-ditch fallback
+
         url = _figures.find_figure(*candidates)
         if url:
             self.figure_url = url
