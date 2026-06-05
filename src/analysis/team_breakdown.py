@@ -22,7 +22,8 @@ import numpy as np
 import pandas as pd
 
 from src.analysis._style import (
-    CONCEDED_COLOR, D_COLOR, L_COLOR, SCORED_COLOR, W_COLOR, apply_dark_style,
+    CONCEDED_COLOR, D_COLOR, L_COLOR, SCORED_COLOR, W_COLOR,
+    apply_dark_style, integer_axis,
 )
 from src.db.schema import get_connection
 
@@ -179,6 +180,7 @@ def _plot_season_summary(ax, dft):
     ax.set_title("Results by season\n(left = home, right = away with hatching)")
     ax.legend(loc="upper right", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
+    integer_axis(ax, "y")
 
 
 def _plot_goals_distribution(ax, dft):
@@ -201,6 +203,7 @@ def _plot_goals_distribution(ax, dft):
     ax.set_xticks(range(max_g + 1))
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
+    integer_axis(ax, "y")
 
 
 def _plot_points_trajectory(ax, dft):
@@ -226,6 +229,7 @@ def _plot_points_trajectory(ax, dft):
     ax.set_title("Cumulative points by season")
     ax.legend(loc="upper left", fontsize=8)
     ax.grid(alpha=0.3)
+    integer_axis(ax, "both")
 
 
 def _plot_opponents(ax, dft, top_n: int = 12):
@@ -248,6 +252,7 @@ def _plot_opponents(ax, dft, top_n: int = 12):
     ax.set_title(f"Top {len(counts)} most-played opponents")
     ax.legend(loc="lower right")
     ax.grid(axis="x", alpha=0.3)
+    integer_axis(ax, "x")
 
 
 def _plot_scoreline_heatmap(ax, dft, cap: int = 5):
@@ -299,6 +304,7 @@ def _plot_by_competition(ax, dft):
     ax.set_title("Performance by competition")
     ax.legend(loc="lower right")
     ax.grid(axis="x", alpha=0.3)
+    integer_axis(ax, "x")
 
 
 def plot_team_breakdown(name: str, dft: pd.DataFrame, out_path: Path) -> None:

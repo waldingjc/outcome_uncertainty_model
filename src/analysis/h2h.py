@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from src.analysis._style import (
-    CYCLE, D_COLOR, L_COLOR, W_COLOR, apply_dark_style,
+    CYCLE, D_COLOR, L_COLOR, W_COLOR, apply_dark_style, integer_axis,
 )
 from src.analysis.team_breakdown import team_perspective
 
@@ -149,6 +149,7 @@ def _plot_goals_overlay(
     ax.set_xticks(range(max_g + 1))
     ax.legend(loc="upper right", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
+    integer_axis(ax, "y")
 
 
 def _plot_points_by_season(
@@ -182,6 +183,7 @@ def _plot_points_by_season(
     ax.set_title("Most-recent season points trajectory")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(alpha=0.3)
+    integer_axis(ax, "both")
 
 
 def _plot_rolling_winrate(
@@ -250,6 +252,7 @@ def _plot_by_competition(
     ax.set_title(f"Top {len(top_leagues)} competitions (per team)")
     ax.legend(loc="lower right", fontsize=9)
     ax.grid(axis="x", alpha=0.3)
+    integer_axis(ax, "x")
 
 
 def _plot_meetings_by_season(
@@ -301,6 +304,7 @@ def _plot_meetings_by_season(
     ax.set_title("H2H meetings by season (stacked by winner)")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
+    integer_axis(ax, "y")
 
 
 # ---------------- Driver ----------------

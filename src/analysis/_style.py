@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 # Slate-ish background mirroring the Radix `slate` palette the webapp uses,
 # with orange-tinted accents that match THEME_ACCENT_COLOR = "orange".
@@ -85,3 +86,22 @@ D_COLOR = "#e9c46a"   # draw — mustard
 L_COLOR = "#ef6f6c"   # loss — coral (lighter than pure red, plays nicer on dark)
 SCORED_COLOR = "#62b6cb"   # cyan-blue for "goals scored"
 CONCEDED_COLOR = "#ef6f6c" # coral for "goals conceded"
+
+
+def integer_axis(ax, axis: str = "y") -> None:
+    """Force the given axis to use whole-number ticks only.
+
+    Matplotlib's default autoscale picks fractional ticks (0.5, 1.5, ...)
+    when the data range is small, even when the values are intrinsically
+    integer-valued (matches played, goals scored, points, etc.). Apply
+    this to any axis where 0.5 of something is meaningless.
+
+    `axis` is "y" (default), "x", or "both". Use this AFTER plotting,
+    since MaxNLocator inspects the axis limits.
+    """
+    locator = MaxNLocator(integer=True, min_n_ticks=1)
+    if axis in ("y", "both"):
+        ax.yaxis.set_major_locator(locator)
+    if axis in ("x", "both"):
+        # MaxNLocator can't be shared between axes — make a fresh one.
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
