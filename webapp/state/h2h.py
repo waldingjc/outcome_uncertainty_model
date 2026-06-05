@@ -35,6 +35,13 @@ INITIAL_SLOTS = 2
 _REPO_ROOT = Path(__file__).parents[2]
 _FIGURES_DIR = _REPO_ROOT / "data" / "figures"
 
+# Bump this whenever the plot code changes in a way that should invalidate
+# cached PNGs (palette, axis fixes, panel layout, etc.). The version is
+# baked into the cache filename — old files with a different version
+# simply won't be hit, so the next /h2h render produces a fresh figure
+# with the current code. Cheap immortality for the cache.
+_FIGURE_VERSION = "v2"
+
 
 class H2HState(rx.State):
     # ---- Inputs --------------------------------------------------------
@@ -291,7 +298,9 @@ class H2HState(rx.State):
         if cache_key == self.last_figure_key and self.figure_url:
             return self.figure_url
 
-        png_name = "h2h_" + "_vs_".join(key_parts) + ".png"
+        png_name = (
+            f"h2h_{_FIGURE_VERSION}_" + "_vs_".join(key_parts) + ".png"
+        )
         # Filesystems aren't kind to extremely long names — cap it.
         if len(png_name) > 200:
             png_name = png_name[:196] + ".png"

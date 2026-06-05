@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).parents[2]
 _FIGURES_DIR = _REPO_ROOT / "data" / "figures"
 
+# Bump when plot_team_breakdown's output should be regenerated (palette,
+# axis-fix, panel-layout changes). The version is baked into the cache
+# filename so old PNGs sit unused on disk and the next render produces
+# a fresh figure with the current code.
+_FIGURE_VERSION = "v2"
+
 
 # Fixtures live in `webapp._cache.fixtures()` — shared with /h2h so the
 # 480K-row dataframe (~2.7s cold load from SQLite) only loads once per
@@ -182,7 +188,7 @@ class TeamState(rx.State):
         the cached file. Returns "" on failure.
         """
         safe = re.sub(r"[^\w\-]+", "_", name).strip("_") or "team"
-        png_name = f"team_{safe}.png"
+        png_name = f"team_{_FIGURE_VERSION}_{safe}.png"
         out_path = _FIGURES_DIR / png_name
 
         if not out_path.exists():
