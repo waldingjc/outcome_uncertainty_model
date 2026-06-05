@@ -22,8 +22,8 @@ import pandas as pd
 import reflex as rx
 
 from src.analysis.h2h import plot_h2h_breakdown
-from src.analysis.team_breakdown import find_team, load_fixtures
-from webapp import _figures
+from src.analysis.team_breakdown import find_team
+from webapp import _cache, _figures
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +34,6 @@ INITIAL_SLOTS = 2
 
 _REPO_ROOT = Path(__file__).parents[2]
 _FIGURES_DIR = _REPO_ROOT / "data" / "figures"
-
-
-# Module-level fixtures cache — shared with /team via the same lazy
-# loader pattern. ~1s on first call, ~free afterwards.
-_FIXTURES: pd.DataFrame | None = None
-
-
-def _get_fixtures() -> pd.DataFrame:
-    global _FIXTURES
-    if _FIXTURES is None:
-        _FIXTURES = load_fixtures()
-    return _FIXTURES
 
 
 class H2HState(rx.State):
@@ -75,6 +63,12 @@ class H2HState(rx.State):
 
     # ---- Figure URL (generated on demand, cached) ----------------------
     figure_url: str = ""
+
+    # Cache key for the most recently rendered figure — used to skip
+    # `_ensure_figure` when the resolved team set hasn't changed since
+    # the last call. Avoids re-rendering on every keystroke once the
+    # second team has stabilised.
+    last_figure_key: str = ""
 
     # ---- Computed display strings -------------------------------------
 
@@ -160,7 +154,7 @@ class H2HState(rx.State):
             new_err[idx]   = ""
         else:
             try:
-                tid, name = find_team(q, _get_fixtures())
+                tid, name = find_team(q, _cache.fixtures())
                 new_ids[idx]   = tid
                 new_names[idx] = name
                 new_err[idx]   = ""
@@ -192,7 +186,7 @@ class H2HState(rx.State):
             self._clear_aggregates()
             return
 
-        df = _get_fixtures()
+        df = _cache.fixtures()
         tset = set(ids)
         h2h = df[
             df["home_team_id"].isin(tset) & df["away_team_id"].isin(tset)
@@ -278,6 +272,7 @@ class H2HState(rx.State):
         self.competitions = []
         self.meetings = []
         self.figure_url = ""
+        self.last_figure_key = ""
 
     def _ensure_figure(
         self, team_ids: list[int], team_names: list[str], df: pd.DataFrame,
@@ -287,20 +282,38 @@ class H2HState(rx.State):
         doesn't cause redundant renders."""
         key_parts = ["_".join(re.findall(r"\w+", n)) for n, _ in
                      sorted(zip(team_names, team_ids), key=lambda x: x[1])]
+        cache_key = "|".join(key_parts)
+
+        # Fast path — same team set as last render, reuse the URL.
+        # Catches the common case where the user typed a few stray
+        # characters into the search box but the resolved set never
+        # actually changed.
+        if cache_key == self.last_figure_key and self.figure_url:
+            return self.figure_url
+
         png_name = "h2h_" + "_vs_".join(key_parts) + ".png"
         # Filesystems aren't kind to extremely long names — cap it.
         if len(png_name) > 200:
             png_name = png_name[:196] + ".png"
         out_path = _FIGURES_DIR / png_name
 
+        newly_rendered = False
         if not out_path.exists():
             try:
                 plot_h2h_breakdown(team_ids, team_names, df, out_path)
+                newly_rendered = True
             except Exception as e:
                 logger.warning(
                     "Failed to render H2H figure for %s: %s", team_names, e,
                 )
                 return ""
 
-        _figures.sync_figures()
-        return _figures.find_figure(png_name) or ""
+        # Only sync assets when we just wrote a new figure — sync_figures
+        # walks the data/figures/ tree and that adds up over many
+        # keystrokes if we do it unconditionally.
+        if newly_rendered:
+            _figures.sync_figures()
+
+        url = _figures.find_figure(png_name) or ""
+        self.last_figure_key = cache_key
+        return url

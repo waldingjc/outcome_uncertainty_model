@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import reflex as rx
 
-from webapp import _figures, style
+from webapp import _cache, _figures, style
 from webapp.pages.h2h import h2h
 from webapp.pages.home import home
 from webapp.pages.leagues import leagues
@@ -25,6 +25,12 @@ from webapp.state.pipeline import PipelineState
 # page render. sync_figures() copies any new PNGs from data/figures/
 # into assets/figures/, where Reflex serves them at /figures/<name>.
 _figures.sync_figures()
+
+# Pre-warm the heavy caches (full fixtures dataframe ~2.7s, Elo walk
+# ~few seconds, league/season dropdown sources) so the first user
+# navigation doesn't pay cold-start. This blocks the dev server boot
+# by a few seconds but every subsequent page hit is instant.
+_cache.prewarm()
 
 
 # Theme — passed once at App construction time. Reflex applies it

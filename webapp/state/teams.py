@@ -24,9 +24,9 @@ import pandas as pd
 import reflex as rx
 
 from src.analysis.team_breakdown import (
-    find_team, load_fixtures, plot_team_breakdown, team_perspective,
+    find_team, plot_team_breakdown,
 )
-from webapp import _figures
+from webapp import _cache, _figures
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +34,9 @@ _REPO_ROOT = Path(__file__).parents[2]
 _FIGURES_DIR = _REPO_ROOT / "data" / "figures"
 
 
-# Cache the fixtures DataFrame at module level — loading 480K rows from
-# SQLite takes ~1 second, and the data only changes once a day. Reflex's
-# State is per-session, so a module-level cache survives across sessions.
-_FIXTURES: pd.DataFrame | None = None
-
-
-def _get_fixtures() -> pd.DataFrame:
-    global _FIXTURES
-    if _FIXTURES is None:
-        _FIXTURES = load_fixtures()
-    return _FIXTURES
+# Fixtures live in `webapp._cache.fixtures()` — shared with /h2h so the
+# 480K-row dataframe (~2.7s cold load from SQLite) only loads once per
+# process lifetime instead of twice.
 
 
 class TeamState(rx.State):
@@ -132,14 +124,14 @@ class TeamState(rx.State):
             self._clear()
             return
         try:
-            df = _get_fixtures()
+            df = _cache.fixtures()
             tid, name = find_team(self.query.strip(), df)
         except ValueError as e:
             self._clear()
             self.error = str(e)
             return
 
-        dft = team_perspective(df, tid)
+        dft = _cache.team_perspective_for(tid)
         if dft.empty:
             self._clear()
             self.error = f"No fixtures found for {name}"

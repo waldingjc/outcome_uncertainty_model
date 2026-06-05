@@ -20,8 +20,43 @@ from src.analysis.strength import (
     primary_league_map,
     team_name_map,
 )
+from src.analysis.team_breakdown import (
+    load_fixtures as _load_fixtures_team_view,
+    team_perspective as _team_perspective,
+)
 from src.db.schema import get_connection
 from src.model.data import load_fixtures_for_elo
+
+
+@lru_cache(maxsize=1)
+def fixtures() -> pd.DataFrame:
+    """Full fixtures dataframe (~480K rows, ~2.7s to load).
+
+    Shared between /team, /h2h, and any future page that needs match-
+    level data. Lives behind an lru_cache so we read it from SQLite
+    once per process lifetime instead of once per page.
+    """
+    return _load_fixtures_team_view()
+
+
+@lru_cache(maxsize=2048)
+def team_perspective_for(team_id: int) -> pd.DataFrame:
+    """Cached per-team perspective dataframe. Computing it is fast
+    (~5ms), but `plot_h2h_breakdown` used to call it 10-20 times per
+    figure render (once per panel per team) which added up. The cache
+    is keyed on team_id only since the underlying fixtures cache also
+    lives for the process lifetime."""
+    return _team_perspective(fixtures(), team_id)
+
+
+def prewarm():
+    """Touch the heavy caches so the first page render doesn't pay
+    cold-start. Called from `webapp.webapp` at module-import time so
+    the user's first navigation is already warm."""
+    fixtures()
+    league_choices()
+    season_choices()
+    elo_cache()
 
 
 @lru_cache(maxsize=1)
