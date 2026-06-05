@@ -47,6 +47,7 @@ def sidebar() -> rx.Component:
         rx.vstack(
             _nav_item("Home",              "/",          "house"),
             _nav_item("Team breakdown",    "/team",      "user"),
+            _nav_item("Head to head",      "/h2h",       "swords"),
             _nav_item("League ladders",    "/leagues",   "trophy"),
             _nav_item("Model dashboard",   "/model",     "chart-line"),
             _nav_item("Pipeline status",   "/pipeline",  "activity"),

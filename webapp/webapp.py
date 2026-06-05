@@ -9,6 +9,7 @@ from __future__ import annotations
 import reflex as rx
 
 from webapp import _figures, style
+from webapp.pages.h2h import h2h
 from webapp.pages.home import home
 from webapp.pages.leagues import leagues
 from webapp.pages.model import model_dashboard
@@ -55,6 +56,12 @@ app.add_page(
     team,
     route="/team",
     title="Team breakdown · Outcome Uncertainty Model",
+)
+
+app.add_page(
+    h2h,
+    route="/h2h",
+    title="Head to head · Outcome Uncertainty Model",
 )
 
 app.add_page(

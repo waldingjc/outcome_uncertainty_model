@@ -5,8 +5,26 @@ from __future__ import annotations
 
 import reflex as rx
 
+from webapp import _qualifications as _quals
 from webapp.components.layout import page
 from webapp.state.leagues import LeagueState
+
+
+def _qual_color(qual_var, shade: int) -> rx.Var:
+    """Map a row's `qual` field (string Var) onto the project color for
+    that qualification kind. Returns gray for "" (no qualification) so
+    we can use this colour as a transparent-ish accent on every row.
+    """
+    return rx.match(
+        qual_var,
+        (_quals.UCL,     rx.color(_quals.COLORS[_quals.UCL],     shade)),
+        (_quals.UEL,     rx.color(_quals.COLORS[_quals.UEL],     shade)),
+        (_quals.UECL,    rx.color(_quals.COLORS[_quals.UECL],    shade)),
+        (_quals.PROMO,   rx.color(_quals.COLORS[_quals.PROMO],   shade)),
+        (_quals.PLAYOFF, rx.color(_quals.COLORS[_quals.PLAYOFF], shade)),
+        (_quals.RELEG,   rx.color(_quals.COLORS[_quals.RELEG],   shade)),
+        rx.color("gray", shade),  # default: no qual
+    )
 
 
 def _controls() -> rx.Component:
@@ -126,8 +144,14 @@ def _table_header() -> rx.Component:
 
 
 def _table_row(row) -> rx.Component:
-    """One row of the points table. Top 4 highlighted with accent;
-    bottom 3 with a subtle red tint for the relegation feel."""
+    """One row of the points table.
+
+    The position cell carries a coloured left-border stripe whose hue
+    indicates the qualification slot (UCL/UEL/UECL/promotion/playoff/
+    relegation). Rows with no qualification get a neutral gray stripe
+    so the column alignment stays consistent.
+    """
+    stripe = _qual_color(row["qual"], 9)
     return rx.table.row(
         rx.table.cell(
             rx.text(
@@ -135,6 +159,11 @@ def _table_row(row) -> rx.Component:
                 style={"font_family": "monospace"},
                 color=rx.color("gray", 11),
             ),
+            style={
+                "border_left": "4px solid",
+                "border_left_color": stripe,
+                "padding_left": "10px",
+            },
         ),
         rx.table.cell(rx.text(row["team"], weight="medium")),
         rx.table.cell(row["P"].to_string()),
@@ -154,6 +183,67 @@ def _table_row(row) -> rx.Component:
                 color=rx.color("orange", 11),
             ),
         ),
+        # Subtle row tint matching the qual colour — only visible for
+        # rows with a real slot, since gray-3 ~= the table background.
+        style={"background": _qual_color(row["qual"], 2)},
+    )
+
+
+def _qual_label(kind_var) -> rx.Var:
+    """Map a Reflex Var holding a qual kind to its human label."""
+    return rx.match(
+        kind_var,
+        (_quals.UCL,     _quals.LABELS[_quals.UCL]),
+        (_quals.UEL,     _quals.LABELS[_quals.UEL]),
+        (_quals.UECL,    _quals.LABELS[_quals.UECL]),
+        (_quals.PROMO,   _quals.LABELS[_quals.PROMO]),
+        (_quals.PLAYOFF, _quals.LABELS[_quals.PLAYOFF]),
+        (_quals.RELEG,   _quals.LABELS[_quals.RELEG]),
+        "",
+    )
+
+
+def _legend_chip(kind) -> rx.Component:
+    """A small swatch + label for one qualification kind, used in the
+    legend strip above the table. `kind` is a Reflex Var here because
+    we're inside an rx.foreach — both the color and the label have to
+    be expressed as rx.match() Vars, not Python dict lookups."""
+    return rx.hstack(
+        rx.box(
+            width="10px",
+            height="10px",
+            border_radius="2px",
+            background=_qual_color(kind, 9),
+        ),
+        rx.text(
+            _qual_label(kind),
+            size="1",
+            color=rx.color("gray", 11),
+        ),
+        spacing="2",
+        align="center",
+    )
+
+
+def _legend() -> rx.Component:
+    """Legend strip — only shows when the current league has known
+    qualification rules. Drives off `LeagueState.active_quals`."""
+    return rx.cond(
+        LeagueState.active_quals.length() > 0,
+        rx.hstack(
+            rx.text(
+                "Slots:",
+                size="1",
+                weight="medium",
+                color=rx.color("gray", 11),
+                style={"text_transform": "uppercase", "letter_spacing": "0.05em"},
+            ),
+            rx.foreach(LeagueState.active_quals, _legend_chip),
+            spacing="4",
+            align="center",
+            wrap="wrap",
+        ),
+        rx.fragment(),
     )
 
 
@@ -172,6 +262,7 @@ def _table() -> rx.Component:
                 align="center",
                 width="100%",
             ),
+            _legend(),
             rx.divider(),
             rx.cond(
                 LeagueState.has_rows,

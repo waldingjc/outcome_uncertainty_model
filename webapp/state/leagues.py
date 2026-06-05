@@ -16,7 +16,7 @@ from typing import Any
 
 import reflex as rx
 
-from webapp import _cache
+from webapp import _cache, _qualifications as _quals
 
 
 # Default sort direction per column. Pts/wins/etc. default to descending
@@ -68,6 +68,15 @@ class LeagueState(rx.State):
             f"{self.league_name} · {self.season}-{(self.season + 1) % 100:02d}  "
             f"({len(self.rows_data)} teams)"
         )
+
+    @rx.var
+    def active_quals(self) -> list[str]:
+        """Qualification kinds present in the current league, in the
+        canonical top-to-bottom order. Drives the legend on the page —
+        we don't want to show "Promotion" on the Premier League legend.
+        """
+        present = {r.get("qual") for r in self.rows_data}
+        return [k for k in _quals.ORDER if k in present]
 
     @rx.var
     def table_rows(self) -> list[dict[str, Any]]:
@@ -142,9 +151,14 @@ class LeagueState(rx.State):
             return
 
         ratings = _cache.elo_cache()["ratings"]
+        total = len(df)
         rows: list[dict[str, Any]] = []
         for pos, r in enumerate(df.itertuples(index=False), start=1):
             elo = ratings.get(int(r.team_id))
+            # Qualification slot — "" (not None) so Reflex Var equality
+            # works cleanly downstream. The page uses this to drive the
+            # row stripe colour.
+            qual = _quals.qualification_for(self.league_id, pos, total) or ""
             rows.append({
                 "pos": pos,
                 "team": r.team,
@@ -159,6 +173,7 @@ class LeagueState(rx.State):
                 # Display value (formatted) + numeric value for sorting.
                 "Elo": f"{elo:.0f}" if elo is not None else "—",
                 "elo_value": float(elo) if elo is not None else None,
+                "qual": qual,
             })
         # Reset to natural order whenever data is reloaded — but keep
         # whatever sort the user had chosen.
