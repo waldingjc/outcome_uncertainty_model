@@ -214,3 +214,11 @@ data/
 
 # Personal study notes / project walkthrough — not for the public repo.
 notes/
+
+# Reflex generates a Next.js + Bun project under .web/ on first run.
+# Hundreds of MB of compiled output, regenerated automatically. Never commit.
+.web/
+
+# Reflex also keeps a local config cache and per-session state.
+reflex.db
+.states/
