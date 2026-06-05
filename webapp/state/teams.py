@@ -149,11 +149,14 @@ class TeamState(rx.State):
         self.team_id = tid
         self.team_name = name
 
-        # Primary league = most-played league name across all matches
-        league_counts = dft["league_name"].value_counts()
-        self.primary_league = (
-            str(league_counts.index[0]) if not league_counts.empty else "—"
-        )
+        # Primary league = the league of the team's most recent match.
+        # Previously we used most-played-across-all-time, but that's
+        # misleading for promoted/relegated clubs — e.g. Derby's modal
+        # league across the dataset is the Championship even though
+        # they're currently in League One. Take the latest fixture's
+        # league instead so the badge reflects "where they play now".
+        latest = dft.sort_values("date", ascending=False).iloc[0]
+        self.primary_league = str(latest["league_name"])
 
         self.match_count = int(len(dft))
         self.win_count   = int((dft["result"] == "W").sum())
